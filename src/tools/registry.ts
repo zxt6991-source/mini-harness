@@ -46,6 +46,7 @@ export class DefaultToolRegistry implements ToolRegistry {
       content: result.content,
       createdAt: Date.now(),
       metadata: {
+        toolCallId: toolCall.id,
         toolName: tool.name,
         success: result.success,
         ...result.metadata,

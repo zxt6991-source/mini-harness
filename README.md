@@ -36,7 +36,7 @@ src/core/          Shared interfaces and errors
 src/runtime/       Agent loop engine
 src/memory/        In-memory message store, context builder, summarizer
 src/mcp/           HTTP MCP client, discovery, tool adapter
-src/models/        Mock provider, OpenAI provider, parser, quality gate
+src/models/        Mock provider, OpenAI provider, Chat Completions provider, parsers, quality gate
 src/orchestration/ Task graph, planner, state machine, coordinator
 src/tools/         Tool registry, executor, and builtin tools
 src/security/      Tool policy and sandbox path checks
@@ -58,6 +58,9 @@ Implemented:
 - MockProvider
 - OpenAIProvider
 - OpenAI Responses API parser
+- ChatCompletionsProvider
+- Chat Completions parser
+- Config-driven provider factory
 - Model output quality gate
 - HttpMcpClient
 - discoverMcpTools
@@ -95,6 +98,26 @@ const provider = new OpenAIProvider({
 ```
 
 The provider maps internal `Message[]` and `Tool[]` into Responses API input and function tools, then parses assistant text and `function_call` output back into `ModelChatOutput`.
+
+## DeepSeek Provider
+
+DeepSeek is supported through the OpenAI-compatible Chat Completions provider. Keep API keys in environment variables, not in `configs/harness.yaml`.
+
+```yaml
+model:
+  provider: deepseek
+  deepseek:
+    model: deepseek-v4-flash
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseUrl: https://api.deepseek.com
+```
+
+```bash
+export DEEPSEEK_API_KEY=sk-<redacted>
+pnpm dev
+```
+
+The default configuration still uses `provider: mock`, so local development and tests do not require a real model API key.
 
 ## MCP Integration
 

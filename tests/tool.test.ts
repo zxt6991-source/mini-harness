@@ -55,6 +55,30 @@ describe('DefaultToolRegistry', () => {
     });
   });
 
+  it('preserves tool call ids in tool message metadata', async () => {
+    const registry = new DefaultToolRegistry();
+    registry.register(new EchoTool());
+
+    const result = await registry.execute(
+      {
+        id: 'call_1',
+        name: 'echo',
+        arguments: { text: 'ok' },
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      id: 'call_1',
+      role: 'tool',
+      metadata: {
+        toolCallId: 'call_1',
+        toolName: 'echo',
+        success: true,
+      },
+    });
+  });
+
   it('throws ToolNotFoundError for unknown tools', async () => {
     const registry = new DefaultToolRegistry();
 
