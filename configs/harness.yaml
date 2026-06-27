@@ -1,0 +1,55 @@
+runtime:
+  maxSteps: 8
+  requestTimeoutMs: 60000
+  toolTimeoutMs: 30000
+  enableStream: false
+
+model:
+  provider: mock
+  openai:
+    model: gpt-5.5
+    apiKeyEnv: OPENAI_API_KEY
+    baseUrl: https://api.openai.com/v1
+  temperature: 0.2
+  maxTokens: 4096
+
+memory:
+  type: local
+  recentLimit: 20
+  searchTopK: 5
+  summary:
+    enabled: true
+    maxSummaryCharacters: 500
+  context:
+    systemPrompt: You are MiniHarness Agent.
+    maxContextCharacters: 12000
+
+tools:
+  enableBuiltin: true
+  allowShell: false
+  allowFile: false
+  allowHttp: false
+
+mcp:
+  enable: false
+  protocolVersion: 2025-06-18
+  requestTimeoutMs: 30000
+  servers:
+    - name: local-tools
+      transport: http
+      endpoint: http://127.0.0.1:3001/mcp
+
+orchestration:
+  enable: true
+  defaultRole: default
+  maxRetries: 1
+  continueOnFailure: true
+
+security:
+  sandboxDir: ./workspace
+  allowNetwork: false
+  allowShell: false
+  allowShellCommands: []
+
+reliability:
+  enableTrace: true
