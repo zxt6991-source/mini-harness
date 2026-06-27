@@ -1,17 +1,19 @@
 import { InMemoryStore } from './memory/local-store';
-import { MockProvider } from './models/mock-provider';
+import { createModelProvider } from './models/provider-factory';
 import { Engine } from './runtime/engine';
 import { DefaultToolRegistry } from './tools/registry';
+import { loadHarnessConfig } from './utils/config';
 
 async function main() {
-  const model = new MockProvider();
+  const config = await loadHarnessConfig();
+  const model = createModelProvider(config);
   const memory = new InMemoryStore();
   const tools = new DefaultToolRegistry();
 
   const engine = new Engine(model, memory, tools, {
-    maxSteps: 8,
-    requestTimeoutMs: 60_000,
-    enableStream: false,
+    maxSteps: config.runtime.maxSteps,
+    requestTimeoutMs: config.runtime.requestTimeoutMs,
+    enableStream: config.runtime.enableStream,
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');

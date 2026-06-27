@@ -10,6 +10,10 @@ model:
     model: gpt-5.5
     apiKeyEnv: OPENAI_API_KEY
     baseUrl: https://api.openai.com/v1
+  deepseek:
+    model: deepseek-v4-flash
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseUrl: https://api.deepseek.com
   temperature: 0.2
   maxTokens: 4096
 
