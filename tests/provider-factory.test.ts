@@ -40,7 +40,31 @@ model:
 
   it('creates DeepSeek chat completions providers from config', () => {
     const provider = createModelProvider({
-      runtime: { maxSteps: 4, requestTimeoutMs: 1000, enableStream: false },
+      runtime: {
+        maxSteps: 4,
+        requestTimeoutMs: 1000,
+        toolTimeoutMs: 30000,
+        enableStream: false,
+        maxConcurrentTools: 1,
+        toolErrorMode: 'throw',
+        modelRetry: {
+          maxRetries: 0,
+          initialBackoffMs: 250,
+          maxBackoffMs: 2000,
+        },
+        budget: {
+          maxModelCalls: 20,
+          maxEstimatedTokens: 1000000,
+          maxContextCharacters: 120000,
+          reserveOutputTokens: 4000,
+        },
+        drift: {
+          maxToolCalls: 50,
+          repeatedToolWindow: 6,
+          repeatedToolThreshold: 1000000,
+          reflectionInterval: 0,
+        },
+      },
       model: {
         provider: 'deepseek',
         temperature: 0.2,
@@ -64,7 +88,31 @@ model:
 
   it('creates OpenAI providers from config', () => {
     const provider = createModelProvider({
-      runtime: { maxSteps: 4, requestTimeoutMs: 1000, enableStream: false },
+      runtime: {
+        maxSteps: 4,
+        requestTimeoutMs: 1000,
+        toolTimeoutMs: 30000,
+        enableStream: false,
+        maxConcurrentTools: 1,
+        toolErrorMode: 'throw',
+        modelRetry: {
+          maxRetries: 0,
+          initialBackoffMs: 250,
+          maxBackoffMs: 2000,
+        },
+        budget: {
+          maxModelCalls: 20,
+          maxEstimatedTokens: 1000000,
+          maxContextCharacters: 120000,
+          reserveOutputTokens: 4000,
+        },
+        drift: {
+          maxToolCalls: 50,
+          repeatedToolWindow: 6,
+          repeatedToolThreshold: 1000000,
+          reflectionInterval: 0,
+        },
+      },
       model: {
         provider: 'openai',
         temperature: 0.2,

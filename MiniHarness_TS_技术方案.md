@@ -99,10 +99,12 @@ MiniHarness/
 │   │
 │   ├── runtime/
 │   │   ├── engine.ts
-│   │   ├── loop.ts
-│   │   ├── stream.ts
-│   │   ├── dispatcher.ts
-│   │   └── session.ts
+│   │   ├── events.ts
+│   │   ├── state.ts
+│   │   ├── tool-scheduler.ts
+│   │   ├── retry.ts
+│   │   ├── budget.ts
+│   │   └── drift.ts
 │   │
 │   ├── tools/
 │   │   ├── registry.ts
@@ -300,17 +302,43 @@ for await (const event of provider.stream(input)) {
 
 ## 5.2 `runtime/` 运行时引擎
 
-`runtime/` 是 Harness 的核心，负责 Agent 主循环。
+`runtime/` 是 Harness 的执行核心，负责 Agent 主循环、运行时事件、工具调度、模型重试、预算控制、取消控制和轻量漂移检测。
 
-### 5.2.1 Engine 结构
+当前实现采用“兼容 API + 事件流 API”的双入口：
+
+- `Engine.run()`：保持原有用法，消费内部事件流并返回最终 Assistant 消息。
+- `Engine.runEvents()`：新增异步事件流入口，用于 UI、日志、调试、监控和未来实时控制平面。
+
+### 5.2.1 Runtime 文件职责
+
+| 文件 | 职责 |
+|---|---|
+| `engine.ts` | Agent 主循环，串联模型、记忆、工具、预算、重试、漂移检测和事件发射 |
+| `events.ts` | 定义运行时事件协议，如 `agent_start`、`model_message`、`tool_result`、`runtime_error` |
+| `state.ts` | 定义 `RunState`、`RunSnapshot`、终止原因和运行取消错误 |
+| `tool-scheduler.ts` | 并发调度一批工具调用，并按原始 tool call 顺序归并结果 |
+| `retry.ts` | 模型调用重试策略，基于 `retryable` 错误标记做指数退避 |
+| `budget.ts` | 请求前预算检查，限制模型调用次数、估算 token 和上下文字符数 |
+| `drift.ts` | 轻量漂移检测，基于重复工具调用和工具调用总数阈值做保护 |
+
+### 5.2.2 Engine 结构
 
 ```ts
-import type { Memory, Message, ModelProvider, ToolRegistry } from '../core';
-
 export interface EngineOptions {
   maxSteps: number;
   requestTimeoutMs: number;
   enableStream: boolean;
+  maxConcurrentTools?: number;
+  toolErrorMode?: 'throw' | 'observe';
+  toolTimeoutMs?: number;
+  modelRetry?: RetryPolicyOptions;
+  budget?: Partial<RuntimeBudget>;
+  drift?: DriftGuardOptions;
+}
+
+export interface EngineRunOptions {
+  abortSignal?: AbortSignal;
+  metadata?: Record<string, unknown>;
 }
 
 export class Engine {
@@ -321,72 +349,231 @@ export class Engine {
     private readonly options: EngineOptions,
   ) {}
 
-  async run(input: string, sessionId: string): Promise<Message> {
-    // 1. 创建用户消息
-    // 2. 组装上下文
-    // 3. 调用模型
-    // 4. 执行工具调用
-    // 5. 返回最终结果
-    throw new Error('not implemented');
-  }
+  async run(input: string, sessionId: string): Promise<Message>;
+
+  runEvents(
+    input: string,
+    sessionId: string,
+    options?: EngineRunOptions,
+  ): AsyncIterable<EngineEvent>;
 }
 ```
 
-TypeScript 说明：
+设计要点：
 
-- `class Engine` 定义运行时引擎对象。
-- `private readonly model` 表示构造后不可修改，只能在类内部访问。
-- `Promise<Message>` 表示异步函数最终返回一条消息。
+- `run()` 面向普通调用方，保持“输入 -> 最终消息”的简单接口。
+- `runEvents()` 面向交互式 UI 和监控系统，逐步产出运行时事件。
+- `EngineRunOptions.abortSignal` 允许外部在安全点取消运行。
+- `metadata` 会透传到模型调用 metadata，便于链路追踪。
 
-### 5.2.2 Agent 主循环
+### 5.2.3 事件协议
+
+运行时事件定义在 `src/runtime/events.ts`：
 
 ```ts
-async run(input: string, sessionId: string): Promise<Message> {
-  const userMessage = createUserMessage(input);
+export type EngineEvent =
+  | AgentStartEvent
+  | TurnStartEvent
+  | ModelStartEvent
+  | ModelDeltaEvent
+  | ModelMessageEvent
+  | ToolStartEvent
+  | ToolResultEvent
+  | TurnEndEvent
+  | AgentEndEvent
+  | RuntimeErrorEvent;
+```
 
-  await this.memory.save(sessionId, userMessage);
+主要事件：
 
-  let messages = await this.memory.buildContext(sessionId, userMessage);
+| 事件 | 含义 |
+|---|---|
+| `agent_start` | 本次运行开始，包含 `sessionId`、`traceId` 和输入长度 |
+| `turn_start` | 新一轮 Agent 循环开始 |
+| `model_start` | 即将调用模型 |
+| `model_message` | 模型 Assistant 消息定稿 |
+| `tool_start` | 某个工具调用开始 |
+| `tool_result` | 某个工具调用结束，包含成功状态和耗时 |
+| `turn_end` | 一轮包含工具调用的循环结束 |
+| `agent_end` | 无工具调用，生成最终 Assistant 消息 |
+| `runtime_error` | 运行时在模型、工具、预算、取消、漂移或终止阶段遇到错误 |
 
-  for (let step = 0; step < this.options.maxSteps; step++) {
-    const output = await this.model.chat({
-      messages,
-      tools: this.tools.list(),
-      options: {
-        timeoutMs: this.options.requestTimeoutMs,
-      },
-    });
+每个事件都带 `RunSnapshot`：
 
-    const assistantMessage = output.message;
-
-    if (!assistantMessage.toolCalls || assistantMessage.toolCalls.length === 0) {
-      await this.memory.save(sessionId, assistantMessage);
-      return assistantMessage;
-    }
-
-    messages.push(assistantMessage);
-
-    for (const toolCall of assistantMessage.toolCalls) {
-      const resultMessage = await this.tools.execute(toolCall, {
-        traceId: assistantMessage.id,
-        sessionId,
-      });
-
-      messages.push(resultMessage);
-      await this.memory.save(sessionId, resultMessage);
-    }
-  }
-
-  throw new Error(`Agent loop exceeded maxSteps=${this.options.maxSteps}`);
+```ts
+export interface RunSnapshot {
+  sessionId: string;
+  traceId: string;
+  step: number;
+  messageCount: number;
+  modelCallCount: number;
+  toolCallCount: number;
+  estimatedTokens: number;
+  usedTokens: number;
+  elapsedMs: number;
+  terminationReason?: TerminationReason;
 }
+```
+
+这让调用方不需要读取内部状态，也能获得稳定的执行进度。
+
+### 5.2.4 Agent 主循环
+
+当前主循环可以概括为：
+
+```text
+创建 user 消息
+  -> 保存到 memory
+  -> buildContext()
+  -> agent_start
+  -> for step < maxSteps
+      -> turn_start
+      -> abort 检查
+      -> model_start
+      -> budget 检查
+      -> model.chat()，必要时按 retry 策略重试
+      -> model_message
+      -> abort 检查
+      -> 如果无 toolCalls
+          -> 保存 assistant
+          -> agent_end
+          -> 返回
+      -> 保存 assistant
+      -> tool_start *
+      -> ToolScheduler 并发执行工具
+      -> tool_result *
+      -> DriftGuard 检测重复工具调用
+      -> turn_end
+  -> maxSteps 超限，发出 runtime_error 并抛出 MaxStepsExceededError
 ```
 
 关键控制点：
 
 1. `maxSteps` 防止 Agent 无限循环。
-2. 每次模型输出都判断是否包含 `toolCalls`。
-3. 工具结果作为 `tool` 消息重新追加到上下文。
-4. 最终没有工具调用时，返回 Assistant 消息。
+2. `BudgetManager` 在每次模型调用前做请求级预算检查。
+3. `RetryPolicy` 只重试 `retryable === true` 的模型错误。
+4. `ToolScheduler` 可以并发执行工具，但写回上下文时保持原始 `toolCalls` 顺序。
+5. `toolErrorMode: observe` 可以将工具错误转成 `role: 'tool'` 消息，让模型下一轮恢复。
+6. `AbortSignal` 在模型调用前、模型消息后、工具执行前等安全点生效。
+7. `DriftGuard` 通过重复工具调用检测和工具调用总数上限降低循环漂移风险。
+
+### 5.2.5 工具调度与错误观察
+
+`ToolScheduler` 的职责是把同一条 assistant 消息里的多个工具调用调度执行：
+
+```ts
+export interface ToolSchedulerOptions {
+  maxConcurrentTools?: number;
+  toolErrorMode?: 'throw' | 'observe';
+}
+```
+
+执行规则：
+
+- `maxConcurrentTools` 控制同批工具调用最大并发数。
+- 工具执行完成顺序可以不同，但返回给 `Engine` 的 `Message[]` 必须按原始 `toolCalls` 顺序排列。
+- `throw` 模式保持原行为：工具缺失、权限拒绝或工具异常直接抛出。
+- `observe` 模式把错误转换成 tool 消息：
+
+```ts
+{
+  id: toolCall.id,
+  role: 'tool',
+  content: 'MiniHarnessError: Tool not found: missing',
+  metadata: {
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    success: false,
+    errorCode: 'TOOL_NOT_FOUND',
+  },
+}
+```
+
+这样模型可以把错误当作观察结果，在下一轮选择替代方案。
+
+### 5.2.6 模型重试
+
+模型 Provider 已经把 HTTP、网络、超时等错误归一化为 `ModelProviderError`，其中包含 `retryable`。
+
+运行时只对可重试错误做重试：
+
+```ts
+export interface RetryPolicyOptions {
+  maxRetries?: number;
+  initialBackoffMs?: number;
+  maxBackoffMs?: number;
+}
+```
+
+不重试：
+
+- API Key 缺失
+- 参数错误
+- 模型输出解析为不可恢复错误
+- 工具权限错误
+- `retryable === false` 的 Provider 错误
+
+每次失败都会发出 `runtime_error`，metadata 中包含：
+
+```ts
+{
+  attempt: number;
+  willRetry: boolean;
+}
+```
+
+### 5.2.7 预算控制
+
+运行时预算定义在 `src/runtime/budget.ts`：
+
+```ts
+export interface RuntimeBudget {
+  maxModelCalls: number;
+  maxEstimatedTokens: number;
+  maxContextCharacters: number;
+  reserveOutputTokens: number;
+}
+```
+
+预算策略：
+
+- 请求前用 `Math.ceil(message.content.length / 4)` 粗略估算 token。
+- 模型返回 `usage` 时记录真实 `usage.totalTokens`。
+- `maxModelCalls` 限制单次任务的模型调用次数。
+- `maxContextCharacters` 限制上下文字符数。
+- `reserveOutputTokens` 为模型输出预留预算。
+
+预算超限时抛出 `RuntimeBudgetExceededError`，并在事件流中产生 `runtime_error`，`phase` 为 `budget`。
+
+### 5.2.8 漂移检测与取消控制
+
+`DriftGuard` 当前实现的是低成本保护：
+
+```text
+工具调用总数超过 maxToolCalls
+  -> RuntimeDriftError
+
+同一工具名 + 同一参数在窗口内重复达到 repeatedToolThreshold
+  -> RuntimeDriftError
+```
+
+工具调用签名使用稳定序列化，避免对象 key 顺序影响检测。
+
+取消控制使用标准 `AbortSignal`：
+
+```ts
+const controller = new AbortController();
+
+for await (const event of engine.runEvents('hello', 'session_1', {
+  abortSignal: controller.signal,
+})) {
+  if (event.type === 'model_message') {
+    controller.abort();
+  }
+}
+```
+
+取消会在安全点抛出 `RuntimeAbortedError`，并发出 `runtime_error`，`terminationReason` 为 `aborted`。
 
 ---
 
@@ -841,52 +1028,91 @@ runtime:
   maxSteps: 8
   requestTimeoutMs: 60000
   toolTimeoutMs: 30000
-  enableStream: true
+  enableStream: false
+  maxConcurrentTools: 1
+  toolErrorMode: throw
+  modelRetry:
+    maxRetries: 0
+    initialBackoffMs: 250
+    maxBackoffMs: 2000
+  budget:
+    maxModelCalls: 20
+    maxEstimatedTokens: 1000000
+    maxContextCharacters: 120000
+    reserveOutputTokens: 4000
+  drift:
+    maxToolCalls: 50
+    repeatedToolWindow: 6
+    repeatedToolThreshold: 1000000
+    reflectionInterval: 0
 
 model:
-  provider: openai
-  model: gpt-4.1
+  provider: deepseek
+  openai:
+    model: gpt-5.5
+    apiKeyEnv: OPENAI_API_KEY
+    baseUrl: https://api.openai.com/v1
+  deepseek:
+    model: deepseek-v4-flash
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseUrl: https://api.deepseek.com
   temperature: 0.2
   maxTokens: 4096
 
 memory:
   type: local
-  path: ./data/memory.db
   recentLimit: 20
   searchTopK: 5
+  summary:
+    enabled: true
+    maxSummaryCharacters: 500
+  context:
+    systemPrompt: You are MiniHarness Agent.
+    maxContextCharacters: 12000
 
 tools:
   enableBuiltin: true
   allowShell: false
-  allowFile: true
-  allowHttp: true
+  allowFile: false
+  allowHttp: false
 
 mcp:
-  enable: true
+  enable: false
+  protocolVersion: 2025-06-18
+  requestTimeoutMs: 30000
   servers:
     - name: local-tools
       transport: http
-      url: http://127.0.0.1:3001
+      endpoint: http://127.0.0.1:3001/mcp
+
+orchestration:
+  enable: true
+  defaultRole: default
+  maxRetries: 1
+  continueOnFailure: true
 
 security:
   sandboxDir: ./workspace
-  allowNetwork: true
-  allowShellCommands:
-    - git
-    - node
-    - npm
-    - pnpm
-    - python
+  allowNetwork: false
+  allowShell: false
+  allowShellCommands: []
 
 reliability:
   enableTrace: true
-  enableMetrics: true
-  retry:
-    maxAttempts: 3
-    backoffMs: 500
 ```
 
 配置读取建议使用 `zod` 做校验，避免启动后才发现配置错误。
+
+运行时相关配置说明：
+
+| 字段 | 说明 |
+|---|---|
+| `maxSteps` | 单次 Agent 循环最大轮数 |
+| `maxConcurrentTools` | 同一轮工具调用最大并发数 |
+| `toolErrorMode` | 工具错误处理模式，`throw` 直接抛错，`observe` 转成 tool 消息 |
+| `modelRetry` | 模型调用重试策略，仅重试 `retryable` 错误 |
+| `budget` | 单次任务模型调用次数、估算 token、上下文字符数限制 |
+| `drift` | 重复工具调用和工具调用总数保护 |
 
 ---
 
@@ -927,18 +1153,26 @@ reliability:
 ```ts
 import { Engine } from './runtime/engine';
 import { InMemoryStore } from './memory/local-store';
-import { MockProvider } from './models/mock-provider';
+import { createModelProvider } from './models/provider-factory';
 import { DefaultToolRegistry } from './tools/registry';
+import { loadHarnessConfig } from './utils/config';
 
 async function main() {
-  const model = new MockProvider();
+  const config = await loadHarnessConfig();
+  const model = createModelProvider(config);
   const memory = new InMemoryStore();
   const tools = new DefaultToolRegistry();
 
   const engine = new Engine(model, memory, tools, {
-    maxSteps: 8,
-    requestTimeoutMs: 60_000,
-    enableStream: false,
+    maxSteps: config.runtime.maxSteps,
+    requestTimeoutMs: config.runtime.requestTimeoutMs,
+    enableStream: config.runtime.enableStream,
+    maxConcurrentTools: config.runtime.maxConcurrentTools,
+    toolErrorMode: config.runtime.toolErrorMode,
+    toolTimeoutMs: config.runtime.toolTimeoutMs,
+    modelRetry: config.runtime.modelRetry,
+    budget: config.runtime.budget,
+    drift: config.runtime.drift,
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');
@@ -955,8 +1189,23 @@ main().catch((error) => {
 TypeScript 说明：
 
 - `async function main()` 表示异步主函数。
+- `loadHarnessConfig()` 会读取 `.env` 和 YAML 配置。
 - `await engine.run(...)` 等待 Harness 执行完成。
 - `main().catch(...)` 用于捕获最外层异常，防止 Promise 未处理。
+
+如果调用方需要观察完整运行过程，可以使用事件流：
+
+```ts
+for await (const event of engine.runEvents('hello', 'default-session')) {
+  if (event.type === 'model_message') {
+    console.log(event.message.content);
+  }
+
+  if (event.type === 'runtime_error') {
+    console.error(event.phase, event.message);
+  }
+}
+```
 
 ---
 
@@ -974,6 +1223,12 @@ core/tool.ts
 core/model.ts
 core/memory.ts
 runtime/engine.ts
+runtime/events.ts
+runtime/state.ts
+runtime/tool-scheduler.ts
+runtime/retry.ts
+runtime/budget.ts
+runtime/drift.ts
 models/mock-provider.ts
 memory/local-store.ts
 tools/registry.ts
@@ -988,6 +1243,8 @@ main.ts
 3. 可以返回 Assistant 消息。
 4. 可以保存最近会话。
 5. 可以通过 npm/pnpm 启动。
+6. 可以通过 `runEvents()` 观察运行时事件。
+7. 可以限制工具并发、模型重试、预算和重复工具调用。
 ```
 
 ---
@@ -1109,6 +1366,11 @@ core 类型转换
 memory 读写
 security 路径校验
 runtime 主循环
+runtime 事件流
+runtime 工具调度
+runtime 模型重试
+runtime 预算控制
+runtime 漂移检测
 models 输出解析
 ```
 
@@ -1142,6 +1404,11 @@ describe('DefaultToolRegistry', () => {
 4. 工具失败后的错误恢复。
 5. 权限拒绝场景。
 6. 最大循环次数限制。
+7. `runEvents()` 事件顺序。
+8. 工具并发执行但按原始顺序写回上下文。
+9. retryable 模型错误重试。
+10. 预算超限和重复工具调用保护。
+11. AbortSignal 取消运行。
 ```
 
 ---
@@ -1190,9 +1457,45 @@ core -> mcp-client
 
 必须配置 `maxSteps`，防止模型反复调用工具导致死循环。
 
+同时应配置任务级预算和漂移保护：
+
+```text
+maxModelCalls
+maxEstimatedTokens
+maxToolCalls
+repeatedToolThreshold
+```
+
+这些限制不是替代 `maxSteps`，而是从模型调用次数、上下文成本和重复行动三个维度补充保护。
+
 ### 10.5 MCP 作为适配层，不侵入 runtime
 
 MCP 协议细节只存在于 `mcp/` 目录中。`runtime/` 只认识统一的 `Tool` 接口。
+
+### 10.6 事件流不替代消息历史
+
+`EngineEvent` 用于观测执行过程，`Message[]` 才是模型上下文的事实来源。
+
+运行时必须保持：
+
+```text
+历史消息只追加
+工具结果按原始 toolCalls 顺序追加
+不回写旧消息
+```
+
+这有利于多轮推理的前缀稳定性，也便于未来接入 prompt caching。
+
+### 10.7 错误恢复必须可配置
+
+工具错误存在两种合理策略：
+
+```text
+throw    -> 保持传统失败语义，适合测试和严格任务
+observe  -> 将错误变成 tool 消息，适合让模型尝试恢复
+```
+
+默认值应保持 `throw`，避免调用方在不知情的情况下吞掉系统错误。
 
 ---
 
@@ -1206,12 +1509,15 @@ MCP 协议细节只存在于 `mcp/` 目录中。`runtime/` 只认识统一的 `T
 3. models/mock-provider.ts
 4. tools/registry.ts
 5. runtime/engine.ts
-6. tools/executor.ts
-7. security/guard.ts
-8. reliability/logger.ts
-9. models/openai-provider.ts
-10. mcp/
-11. orchestration/
+6. runtime/events.ts + runtime/state.ts
+7. runtime/tool-scheduler.ts
+8. runtime/retry.ts + runtime/budget.ts + runtime/drift.ts
+9. tools/executor.ts
+10. security/guard.ts
+11. reliability/logger.ts
+12. models/openai-provider.ts
+13. mcp/
+14. orchestration/
 ```
 
 第一版不要追求功能完整，先把主链路跑通：
@@ -1230,6 +1536,12 @@ MCP 协议细节只存在于 `mcp/` 目录中。`runtime/` 只认识统一的 `T
 
 ```text
 真实模型 -> MCP -> 编排引擎
+```
+
+运行时增强版应补齐：
+
+```text
+runEvents -> 工具并发调度 -> 错误观察 -> 模型重试 -> 预算控制 -> 漂移保护
 ```
 
 ---
@@ -1254,6 +1566,7 @@ MiniHarness 的核心思想是：
 ```text
 core 定标准
 runtime 跑循环
+runtime 发事件、控预算、调工具
 tools 管工具
 memory 组上下文
 models 接模型
@@ -1272,9 +1585,11 @@ Tool
 ModelProvider
 Memory
 Engine
+EngineEvent
+RunSnapshot
 ToolRegistry
 MockProvider
 InMemoryStore
 ```
 
-这条链路跑通后，再逐步扩展工具执行、安全控制、真实模型、MCP 集成、任务编排和可观测性。
+这条链路跑通后，再逐步扩展工具执行、安全控制、真实模型、MCP 集成、任务编排和更完整的控制平面。

@@ -151,6 +151,53 @@ for (const tool of await discoverMcpTools(client)) {
 
 The runtime still only sees `Tool` objects; MCP protocol details stay inside `src/mcp/`.
 
+## Runtime Events and Recovery
+
+`Engine.run()` remains the compatibility API for callers that only need the final assistant message. `Engine.runEvents()` exposes the same run as an async event stream for UIs, logs, and future control-plane integrations.
+
+```ts
+const engine = new Engine(model, memory, tools, config.runtime);
+
+for await (const event of engine.runEvents('hello', 'session_1')) {
+  if (event.type === 'model_message') {
+    console.log(event.message.content);
+  }
+
+  if (event.type === 'runtime_error') {
+    console.error(event.phase, event.message);
+  }
+}
+```
+
+Runtime options now cover tool scheduling, recovery, budgets, and drift checks:
+
+```yaml
+runtime:
+  maxSteps: 8
+  requestTimeoutMs: 60000
+  enableStream: false
+  maxConcurrentTools: 1
+  toolErrorMode: throw # throw | observe
+  modelRetry:
+    maxRetries: 0
+    initialBackoffMs: 250
+    maxBackoffMs: 2000
+  budget:
+    maxModelCalls: 20
+    maxEstimatedTokens: 1000000
+    maxContextCharacters: 120000
+    reserveOutputTokens: 4000
+  drift:
+    maxToolCalls: 50
+    repeatedToolWindow: 6
+    repeatedToolThreshold: 1000000
+    reflectionInterval: 0
+```
+
+`toolErrorMode: observe` converts tool failures into `role: "tool"` messages with `success: false` metadata, allowing the model to recover in the next loop. The default remains `throw` to preserve existing behavior.
+
+Tool calls from the same assistant message can run concurrently with `maxConcurrentTools`, while tool result messages are still appended in the original call order to preserve prompt-prefix stability.
+
 ## Orchestration
 
 The orchestration layer can split goals into tasks, validate task dependencies, run tasks in dependency order, retry failed tasks, downgrade blocked work to `skipped`, and dispatch work to role-specific handlers.

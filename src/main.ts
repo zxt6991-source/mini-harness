@@ -16,6 +16,12 @@ async function main() {
     maxSteps: config.runtime.maxSteps,
     requestTimeoutMs: config.runtime.requestTimeoutMs,
     enableStream: config.runtime.enableStream,
+    maxConcurrentTools: config.runtime.maxConcurrentTools,
+    toolErrorMode: config.runtime.toolErrorMode,
+    toolTimeoutMs: config.runtime.toolTimeoutMs,
+    modelRetry: config.runtime.modelRetry,
+    budget: config.runtime.budget,
+    drift: config.runtime.drift,
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');

@@ -1,6 +1,12 @@
 // 该文件统一导出 MiniHarness 的公共 API，方便外部以包入口方式引用各模块能力。
 export * from './core';
 export * from './runtime/engine';
+export * from './runtime/budget';
+export * from './runtime/drift';
+export * from './runtime/events';
+export * from './runtime/retry';
+export * from './runtime/state';
+export * from './runtime/tool-scheduler';
 export * from './memory/context-builder';
 export * from './memory/local-store';
 export * from './memory/summarizer';

@@ -9,16 +9,82 @@ const providerConfigSchema = z.object({
   baseUrl: z.string().url(),
 });
 
+const runtimeRetryConfigSchema = z
+  .object({
+    maxRetries: z.number().int().nonnegative().default(0),
+    initialBackoffMs: z.number().int().nonnegative().default(250),
+    maxBackoffMs: z.number().int().nonnegative().default(2_000),
+  })
+  .default({
+    maxRetries: 0,
+    initialBackoffMs: 250,
+    maxBackoffMs: 2_000,
+  });
+
+const runtimeBudgetConfigSchema = z
+  .object({
+    maxModelCalls: z.number().int().positive().default(20),
+    maxEstimatedTokens: z.number().int().positive().default(1_000_000),
+    maxContextCharacters: z.number().int().positive().default(120_000),
+    reserveOutputTokens: z.number().int().nonnegative().default(4_000),
+  })
+  .default({
+    maxModelCalls: 20,
+    maxEstimatedTokens: 1_000_000,
+    maxContextCharacters: 120_000,
+    reserveOutputTokens: 4_000,
+  });
+
+const runtimeDriftConfigSchema = z
+  .object({
+    maxToolCalls: z.number().int().positive().default(50),
+    repeatedToolWindow: z.number().int().positive().default(6),
+    repeatedToolThreshold: z.number().int().positive().default(1_000_000),
+    reflectionInterval: z.number().int().nonnegative().default(0),
+  })
+  .default({
+    maxToolCalls: 50,
+    repeatedToolWindow: 6,
+    repeatedToolThreshold: 1_000_000,
+    reflectionInterval: 0,
+  });
+
 const runtimeConfigSchema = z
   .object({
     maxSteps: z.number().int().positive().default(8),
     requestTimeoutMs: z.number().int().positive().default(60_000),
+    toolTimeoutMs: z.number().int().positive().default(30_000),
     enableStream: z.boolean().default(false),
+    maxConcurrentTools: z.number().int().positive().default(1),
+    toolErrorMode: z.enum(['throw', 'observe']).default('throw'),
+    modelRetry: runtimeRetryConfigSchema,
+    budget: runtimeBudgetConfigSchema,
+    drift: runtimeDriftConfigSchema,
   })
   .default({
     maxSteps: 8,
     requestTimeoutMs: 60_000,
+    toolTimeoutMs: 30_000,
     enableStream: false,
+    maxConcurrentTools: 1,
+    toolErrorMode: 'throw',
+    modelRetry: {
+      maxRetries: 0,
+      initialBackoffMs: 250,
+      maxBackoffMs: 2_000,
+    },
+    budget: {
+      maxModelCalls: 20,
+      maxEstimatedTokens: 1_000_000,
+      maxContextCharacters: 120_000,
+      reserveOutputTokens: 4_000,
+    },
+    drift: {
+      maxToolCalls: 50,
+      repeatedToolWindow: 6,
+      repeatedToolThreshold: 1_000_000,
+      reflectionInterval: 0,
+    },
   });
 
 const modelConfigSchema = z
