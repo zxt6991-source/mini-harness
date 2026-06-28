@@ -1,11 +1,13 @@
 // 该文件负责调度一组工具调用，支持受限并发、顺序归并和错误观察模式。
 import type { Message, ToolCall, ToolContext, ToolRegistry } from '../core';
+import { ToolTimeoutError } from '../core';
 
 export type ToolErrorMode = 'throw' | 'observe';
 
 export interface ToolSchedulerOptions {
   maxConcurrentTools?: number;
   toolErrorMode?: ToolErrorMode;
+  toolTimeoutMs?: number;
 }
 
 export interface ToolExecutionRecord {
@@ -49,6 +51,7 @@ function createErrorObservation(toolCall: ToolCall, error: unknown): Message {
 export class ToolScheduler {
   private readonly maxConcurrentTools: number;
   private readonly toolErrorMode: ToolErrorMode;
+  private readonly toolTimeoutMs: number | undefined;
 
   /** 注入工具注册表和调度选项。 */
   constructor(
@@ -57,6 +60,7 @@ export class ToolScheduler {
   ) {
     this.maxConcurrentTools = Math.max(1, options.maxConcurrentTools ?? 1);
     this.toolErrorMode = options.toolErrorMode ?? 'throw';
+    this.toolTimeoutMs = options.toolTimeoutMs;
   }
 
   /** 并发执行全部工具调用，并返回按 toolCalls 原顺序排列的执行记录。 */
@@ -93,7 +97,7 @@ export class ToolScheduler {
     const startedAt = Date.now();
 
     try {
-      const message = await this.registry.execute(toolCall, ctx);
+      const message = await this.executeRegistryCall(toolCall, ctx);
       return {
         toolCall,
         message,
@@ -110,5 +114,57 @@ export class ToolScheduler {
         latencyMs: Date.now() - startedAt,
       };
     }
+  }
+
+  /** 为单个工具调用创建独立上下文，并按调度器超时做 Promise 级保护。 */
+  private async executeRegistryCall(
+    toolCall: ToolCall,
+    ctx: ToolContext,
+  ): Promise<Message> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+
+    if (ctx.abortSignal?.aborted) {
+      controller.abort();
+    } else {
+      ctx.abortSignal?.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const toolContext: ToolContext = {
+      ...ctx,
+      abortSignal: controller.signal,
+      toolCallId: toolCall.id,
+      ...(this.toolTimeoutMs ? { timeoutMs: this.toolTimeoutMs } : {}),
+    };
+
+    try {
+      return await this.withTimeout(
+        () => this.registry.execute(toolCall, toolContext),
+        controller,
+      );
+    } finally {
+      ctx.abortSignal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /** 在调度器层保护工具调用，确保 direct registry execution 也受超时控制。 */
+  private async withTimeout<T>(
+    call: () => Promise<T>,
+    controller: AbortController,
+  ): Promise<T> {
+    if (!this.toolTimeoutMs || this.toolTimeoutMs <= 0) {
+      return call();
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        controller.abort();
+        reject(new ToolTimeoutError(this.toolTimeoutMs ?? 0));
+      }, this.toolTimeoutMs);
+
+      call()
+        .then(resolve, reject)
+        .finally(() => clearTimeout(timeout));
+    });
   }
 }

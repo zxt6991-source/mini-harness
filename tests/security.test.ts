@@ -45,6 +45,42 @@ describe('SecurityGuard', () => {
 
     await expect(guard.checkToolPermission('echo', {})).resolves.toBeUndefined();
   });
+
+  it('denies network category tools when network access is disabled', async () => {
+    const guard = new SecurityGuard({
+      allowTools: [],
+      denyTools: [],
+      sandboxDir: '.',
+      allowNetwork: false,
+      allowShell: true,
+      allowedShellCommands: [],
+    });
+
+    await expect(
+      guard.checkToolPermission('web_fetch', {}, {
+        category: 'network',
+        requiredPermissions: ['network'],
+      } as never),
+    ).rejects.toThrow('Network tools are disabled by policy: web_fetch');
+  });
+
+  it('denies execution category tools when shell access is disabled', async () => {
+    const guard = new SecurityGuard({
+      allowTools: [],
+      denyTools: [],
+      sandboxDir: '.',
+      allowNetwork: true,
+      allowShell: false,
+      allowedShellCommands: [],
+    });
+
+    await expect(
+      guard.checkToolPermission('shell_exec', {}, {
+        category: 'execution',
+        requiredPermissions: ['shell'],
+      } as never),
+    ).rejects.toThrow('Shell tools are disabled by policy: shell_exec');
+  });
 });
 
 describe('validateSandboxPath', () => {

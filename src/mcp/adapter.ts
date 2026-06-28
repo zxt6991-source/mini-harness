@@ -1,7 +1,11 @@
 // 该文件将 MCP 工具适配为 MiniHarness 内部 Tool 接口，并把 MCP 内容转换为文本结果。
-import type { Tool, ToolContext, ToolResult } from '../core';
+import type { Tool, ToolCapability, ToolContext, ToolResult } from '../core';
 import type { McpClient } from './client';
 import type { McpCallToolResult, McpContent, McpTool } from './protocol';
+
+export interface McpToolAdapterOptions {
+  namePrefix?: string;
+}
 
 /** 判断未知值是否为普通对象，便于安全访问 MCP resource 字段。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,6 +49,7 @@ function resultToToolResult(
   result: McpCallToolResult,
   serverName: string,
   toolName: string,
+  internalToolName?: string,
 ): ToolResult {
   return {
     success: result.isError !== true,
@@ -52,6 +57,9 @@ function resultToToolResult(
     metadata: {
       mcpServerName: serverName,
       mcpToolName: toolName,
+      ...(internalToolName && internalToolName !== toolName
+        ? { internalToolName }
+        : {}),
       mcpContent: result.content,
       structuredContent: result.structuredContent,
       isError: result.isError ?? false,
@@ -64,15 +72,29 @@ export class McpToolAdapter implements Tool {
   readonly name: string;
   readonly description: string;
   readonly schema: unknown;
+  readonly capability: Partial<Omit<ToolCapability, 'name' | 'description' | 'schema'>>;
 
   /** 绑定 MCP 工具元数据和客户端，生成可被模型调用的内部工具。 */
   constructor(
     private readonly tool: McpTool,
     private readonly client: McpClient,
+    options: McpToolAdapterOptions = {},
   ) {
-    this.name = tool.name;
+    this.name = options.namePrefix
+      ? `${sanitizeToolName(options.namePrefix)}_${sanitizeToolName(tool.name)}`
+      : tool.name;
     this.description = tool.description ?? tool.title ?? tool.name;
     this.schema = tool.inputSchema;
+    this.capability = {
+      category: 'mcp',
+      accessLevel: 'trusted',
+      source: 'mcp',
+      metadata: {
+        mcpServerName: client.serverName,
+        mcpToolName: tool.name,
+        mcpOriginalName: tool.name,
+      },
+    };
   }
 
   /** 转发工具调用到 MCP 客户端，并把 MCP 结果转换成内部工具结果。 */
@@ -81,11 +103,22 @@ export class McpToolAdapter implements Tool {
     ctx: ToolContext,
   ): Promise<ToolResult> {
     const result = await this.client.callTool({
-      name: this.name,
+      name: this.tool.name,
       arguments: input,
       traceId: ctx.traceId,
     });
 
-    return resultToToolResult(result, this.client.serverName, this.name);
+    return resultToToolResult(
+      result,
+      this.client.serverName,
+      this.tool.name,
+      this.name,
+    );
   }
+}
+
+/** 把 MCP server/tool 名转换为兼容 function calling 的安全名称片段。 */
+function sanitizeToolName(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  return sanitized || 'tool';
 }

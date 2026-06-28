@@ -20,6 +20,46 @@ export class ToolNotFoundError extends MiniHarnessError {
   }
 }
 
+/** 表示工具注册名、输入参数或 Schema 校验失败。 */
+export class ToolValidationError extends MiniHarnessError {
+  constructor(message: string, cause?: unknown) {
+    super(message, 'TOOL_VALIDATION_ERROR', cause);
+    this.name = 'ToolValidationError';
+  }
+}
+
+/** 表示工具被安全策略拒绝执行。 */
+export class ToolPermissionError extends MiniHarnessError {
+  constructor(message: string, cause?: unknown) {
+    super(message, 'TOOL_PERMISSION_DENIED', cause);
+    this.name = 'ToolPermissionError';
+  }
+}
+
+/** 表示工具调用超过配置的执行时间上限。 */
+export class ToolTimeoutError extends MiniHarnessError {
+  constructor(timeoutMs: number, cause?: unknown) {
+    super(`Tool timed out after ${timeoutMs}ms`, 'TOOL_TIMEOUT', cause);
+    this.name = 'ToolTimeoutError';
+  }
+}
+
+/** 表示工具业务逻辑抛出了不可恢复异常。 */
+export class ToolExecutionError extends MiniHarnessError {
+  constructor(message: string, cause?: unknown) {
+    super(message, 'TOOL_EXECUTION_ERROR', cause);
+    this.name = 'ToolExecutionError';
+  }
+}
+
+/** 表示工具结果无法归一化为运行时可消费的结果。 */
+export class ToolResultError extends MiniHarnessError {
+  constructor(message: string, cause?: unknown) {
+    super(message, 'TOOL_RESULT_ERROR', cause);
+    this.name = 'ToolResultError';
+  }
+}
+
 /** 表示 Agent 循环超过最大步数仍未得到最终回复的错误。 */
 export class MaxStepsExceededError extends MiniHarnessError {
   /** 根据配置的最大步数创建循环超限错误。 */

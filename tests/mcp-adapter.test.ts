@@ -92,4 +92,46 @@ describe('McpToolAdapter', () => {
       content: 'tool failed',
     });
   });
+
+  it('can expose a prefixed internal name while calling the original MCP tool', async () => {
+    const client: McpClient = {
+      serverName: 'local tools',
+      listTools: vi.fn(),
+      callTool: vi.fn(async () => ({
+        content: [{ type: 'text', text: 'hello' }],
+        isError: false,
+      })),
+    };
+    const adapter = new McpToolAdapter(
+      {
+        name: 'echo',
+        description: 'Echo text',
+        inputSchema: { type: 'object' },
+      },
+      client,
+      { namePrefix: 'mcp_local_tools' },
+    );
+
+    expect(adapter.name).toBe('mcp_local_tools_echo');
+    expect(adapter.capability).toMatchObject({
+      category: 'mcp',
+      source: 'mcp',
+      metadata: {
+        mcpServerName: 'local tools',
+        mcpToolName: 'echo',
+      },
+    });
+
+    const result = await adapter.call({ text: 'hello' }, ctx);
+
+    expect(client.callTool).toHaveBeenCalledWith({
+      name: 'echo',
+      arguments: { text: 'hello' },
+      traceId: 'trace_1',
+    });
+    expect(result.metadata).toMatchObject({
+      mcpToolName: 'echo',
+      internalToolName: 'mcp_local_tools_echo',
+    });
+  });
 });

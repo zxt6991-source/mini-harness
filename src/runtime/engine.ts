@@ -318,6 +318,7 @@ export class Engine {
         const scheduler = new ToolScheduler(this.tools, {
           maxConcurrentTools: this.options.maxConcurrentTools,
           toolErrorMode: this.options.toolErrorMode,
+          toolTimeoutMs: this.options.toolTimeoutMs,
         });
         toolResults = await scheduler.executeAll(assistantMessage.toolCalls, {
           traceId: assistantMessage.id,

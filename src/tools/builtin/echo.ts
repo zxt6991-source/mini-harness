@@ -1,5 +1,5 @@
 // 该文件提供内置 echo 工具，用于直接返回输入文本，常用于连通性测试和示例。
-import type { Tool, ToolContext, ToolResult } from '../../core';
+import type { Tool, ToolCapability, ToolContext, ToolResult } from '../../core';
 
 /** 内置回显工具，直接把输入文本作为工具结果返回。 */
 export class EchoTool implements Tool {
@@ -16,6 +16,12 @@ export class EchoTool implements Tool {
       },
     },
     required: ['text'],
+  };
+
+  capability: Partial<Omit<ToolCapability, 'name' | 'description' | 'schema'>> = {
+    category: 'builtin',
+    accessLevel: 'public',
+    source: 'builtin',
   };
 
   /** 读取输入中的 text 字段并原样返回。 */

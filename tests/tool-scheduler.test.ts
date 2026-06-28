@@ -10,6 +10,7 @@ import type {
 } from '../src/core';
 import { InMemoryStore } from '../src/memory/local-store';
 import { Engine } from '../src/runtime/engine';
+import { ToolScheduler } from '../src/runtime/tool-scheduler';
 import { DefaultToolRegistry } from '../src/tools/registry';
 
 class SequenceProvider implements ModelProvider {
@@ -147,4 +148,71 @@ describe('runtime tool scheduling', () => {
       'Tool not found: missing',
     );
   });
+
+  it('passes tool call ids and timeout settings into tool contexts', async () => {
+    let seenContext: ToolContext | undefined;
+    const registry = new DefaultToolRegistry();
+    registry.register(
+      createTool('inspect_ctx', async (_input, ctx) => {
+        seenContext = ctx;
+        return { success: true, content: 'ok' };
+      }),
+    );
+
+    const scheduler = new ToolScheduler(registry, {
+      toolTimeoutMs: 25,
+    } as never);
+
+    await scheduler.executeAll(
+      [{ id: 'call_ctx', name: 'inspect_ctx', arguments: {} }],
+      {
+        traceId: 'trace_1',
+        sessionId: 'session_1',
+      },
+    );
+
+    expect((seenContext as ToolContext & { toolCallId?: string }).toolCallId).toBe(
+      'call_ctx',
+    );
+    expect((seenContext as ToolContext & { timeoutMs?: number }).timeoutMs).toBe(25);
+  });
+
+  it(
+    'can convert tool timeouts into observations',
+    async () => {
+      const registry = new DefaultToolRegistry();
+      registry.register(
+        createTool('slow', async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return { success: true, content: 'late' };
+        }),
+      );
+
+      const scheduler = new ToolScheduler(registry, {
+        toolErrorMode: 'observe',
+        toolTimeoutMs: 1,
+      } as never);
+
+      const [record] = await scheduler.executeAll(
+        [{ id: 'call_slow', name: 'slow', arguments: {} }],
+        {
+          traceId: 'trace_1',
+          sessionId: 'session_1',
+        },
+      );
+
+      expect(record.message).toMatchObject({
+        id: 'call_slow',
+        role: 'tool',
+        metadata: {
+          toolCallId: 'call_slow',
+          toolName: 'slow',
+          success: false,
+          errorCode: 'TOOL_TIMEOUT',
+        },
+      });
+      expect(record.message.content).toContain('Tool timed out after 1ms');
+    },
+    500,
+  );
 });

@@ -22,6 +22,43 @@ describe('DefaultToolRegistry', () => {
     expect(registry.list()).toEqual([tool]);
   });
 
+  it('exposes cached tool capabilities without changing the model tool list', () => {
+    const registry = new DefaultToolRegistry();
+    const tool = new EchoTool();
+
+    registry.register(tool);
+
+    expect(registry.list()).toEqual([tool]);
+    expect(registry.listCapabilities()).toEqual([
+      expect.objectContaining({
+        name: 'echo',
+        description: 'Return the input text directly.',
+        schema: tool.schema,
+        category: 'builtin',
+        accessLevel: 'public',
+        source: 'builtin',
+      }),
+    ]);
+    expect(registry.getCapability('echo')).toMatchObject({
+      name: 'echo',
+      schema: tool.schema,
+    });
+  });
+
+  it('rejects invalid tool names during registration', () => {
+    const registry = new DefaultToolRegistry();
+    const invalidTool = {
+      name: 'bad tool name',
+      description: 'Invalid',
+      schema: { type: 'object' },
+      call: vi.fn(async () => ({ success: true, content: '' })),
+    } as Tool;
+
+    expect(() => registry.register(invalidTool)).toThrow(
+      'Invalid tool name: bad tool name',
+    );
+  });
+
   it('rejects duplicate tool registrations', () => {
     const registry = new DefaultToolRegistry();
     const tool = new EchoTool();

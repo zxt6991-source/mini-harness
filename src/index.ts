@@ -28,6 +28,8 @@ export * from './orchestration/state-machine';
 export * from './orchestration/task';
 export * from './tools/registry';
 export * from './tools/executor';
+export * from './tools/result';
+export * from './tools/validation';
 export * from './tools/builtin/echo';
 export * from './security/policy';
 export * from './security/path';

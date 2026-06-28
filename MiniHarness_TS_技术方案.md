@@ -109,7 +109,8 @@ MiniHarness/
 │   ├── tools/
 │   │   ├── registry.ts
 │   │   ├── executor.ts
-│   │   ├── pipeline.ts
+│   │   ├── validation.ts
+│   │   ├── result.ts
 │   │   └── builtin/
 │   │       ├── echo.ts
 │   │       ├── file.ts
@@ -228,12 +229,51 @@ export interface ToolResult {
   success: boolean;
   content: string;
   metadata?: Record<string, unknown>;
+  errorCode?: string;
+  errorName?: string;
+}
+
+export type ToolCategory =
+  | 'builtin'
+  | 'execution'
+  | 'file'
+  | 'network'
+  | 'agent'
+  | 'domain'
+  | 'mcp';
+
+export type ToolAccessLevel = 'system' | 'admin' | 'trusted' | 'public';
+
+export interface ToolCapability {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  category: ToolCategory;
+  accessLevel: ToolAccessLevel;
+  source: 'builtin' | 'mcp' | 'custom';
+  timeoutMs?: number;
+  cacheable?: boolean;
+  maxResultCharacters?: number;
+  requiredPermissions?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface ToolValidationIssue {
+  path: string;
+  message: string;
+}
+
+export interface ToolValidationResult {
+  ok: boolean;
+  issues?: ToolValidationIssue[];
 }
 
 export interface Tool {
   name: string;
   description: string;
   schema: unknown;
+  capability?: Partial<Omit<ToolCapability, 'name' | 'description' | 'schema'>>;
+  validateInput?(input: Record<string, unknown>): ToolValidationResult;
   call(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -241,10 +281,13 @@ export interface ToolContext {
   traceId: string;
   sessionId: string;
   abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  toolCallId?: string;
+  metadata?: Record<string, unknown>;
 }
 ```
 
-设计原则：所有工具都实现统一的 `Tool` 接口。无论是内置工具、MCP 工具，还是业务自定义工具，都可以注册到同一个工具注册中心。
+设计原则：所有工具都实现统一的 `Tool` 接口。`name`、`description`、`schema`、`call()` 是兼容旧实现的最小契约；`capability`、`validateInput()`、`timeoutMs`、`toolCallId` 是增量能力，用于工具发现、权限控制、输入校验、超时和审计。
 
 ### 5.1.3 模型 Provider 接口
 
@@ -465,12 +508,14 @@ export interface RunSnapshot {
 export interface ToolSchedulerOptions {
   maxConcurrentTools?: number;
   toolErrorMode?: 'throw' | 'observe';
+  toolTimeoutMs?: number;
 }
 ```
 
 执行规则：
 
 - `maxConcurrentTools` 控制同批工具调用最大并发数。
+- `toolTimeoutMs` 控制单个工具调用最大等待时间，并通过子 `AbortSignal` 通知工具取消。
 - 工具执行完成顺序可以不同，但返回给 `Engine` 的 `Message[]` 必须按原始 `toolCalls` 顺序排列。
 - `throw` 模式保持原行为：工具缺失、权限拒绝或工具异常直接抛出。
 - `observe` 模式把错误转换成 tool 消息：
@@ -579,22 +624,30 @@ for await (const event of engine.runEvents('hello', 'session_1', {
 
 ## 5.3 `tools/` 工具层
 
-工具层负责工具注册、工具查询、工具执行和调用审计。
+工具层负责工具注册、工具查询、输入校验、权限检查、超时控制、结果归一化和调用审计。当前实现重点是“保持 `Tool` 最小接口兼容，同时增加能力描述和统一执行流水线”。
 
 ### 5.3.1 工具注册中心
 
 ```ts
-import type { Tool, ToolCall, ToolContext, Message } from '../core';
+import type { Tool, ToolCall, ToolContext, Message, ToolCapability } from '../core';
 
 export class DefaultToolRegistry {
   private readonly tools = new Map<string, Tool>();
+  private readonly capabilities = new Map<string, ToolCapability>();
+
+  constructor(private readonly executor?: ToolExecutor) {}
 
   register(tool: Tool): void {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(tool.name)) {
+      throw new ToolValidationError(`Invalid tool name: ${tool.name}`);
+    }
+
     if (this.tools.has(tool.name)) {
       throw new Error(`Tool already registered: ${tool.name}`);
     }
 
     this.tools.set(tool.name, tool);
+    this.capabilities.set(tool.name, this.buildCapability(tool));
   }
 
   get(name: string): Tool | undefined {
@@ -605,13 +658,34 @@ export class DefaultToolRegistry {
     return [...this.tools.values()];
   }
 
+  listCapabilities(): ToolCapability[] {
+    return [...this.capabilities.values()];
+  }
+
+  getCapability(name: string): ToolCapability | undefined {
+    return this.capabilities.get(name);
+  }
+
+  unregister(name: string): boolean {
+    const removed = this.tools.delete(name);
+    this.capabilities.delete(name);
+    return removed;
+  }
+
   async execute(toolCall: ToolCall, ctx: ToolContext): Promise<Message> {
     const tool = this.get(toolCall.name);
     if (!tool) {
-      throw new Error(`Tool not found: ${toolCall.name}`);
+      throw new ToolNotFoundError(toolCall.name);
     }
 
-    const result = await tool.call(toolCall.arguments, ctx);
+    const result = this.executor
+      ? await this.executor.execute(
+          tool,
+          toolCall.arguments,
+          ctx,
+          this.getCapability(tool.name),
+        )
+      : await tool.call(toolCall.arguments, ctx);
 
     return {
       id: toolCall.id,
@@ -628,11 +702,12 @@ export class DefaultToolRegistry {
 }
 ```
 
-`Map<string, Tool>` 说明：
+注册表的职责：
 
-- `Map` 适合做注册表。
-- key 是工具名称。
-- value 是工具实例。
+- `list()` 仍返回 `Tool[]`，供 OpenAI/Chat Completions provider 转成 function tools。
+- `listCapabilities()` 返回带分类、来源、权限、超时和结果限制的能力视图，供 UI、调试和动态工具发现使用。
+- 注册时校验工具名，确保兼容模型 function calling。
+- 注册时缓存 schema/capability，避免每轮模型调用重复构造。
 
 ### 5.3.2 工具执行流水线
 
@@ -640,11 +715,11 @@ export class DefaultToolRegistry {
 
 ```text
 ToolCall
-  -> 参数校验
   -> 权限检查
+  -> 输入校验
   -> 超时控制
   -> 执行工具
-  -> 结果裁剪
+  -> 结果归一化和裁剪
   -> 日志记录
   -> 返回 ToolResult
 ```
@@ -653,20 +728,37 @@ ToolCall
 
 ```ts
 export class ToolExecutor {
-  constructor(
-    private readonly securityGuard: SecurityGuard,
-    private readonly logger: Logger,
-  ) {}
+  constructor(private readonly securityGuard: SecurityGuard) {}
 
-  async execute(tool: Tool, input: Record<string, unknown>, ctx: ToolContext) {
-    await this.securityGuard.checkToolPermission(tool.name, input);
-
+  async execute(
+    tool: Tool,
+    input: Record<string, unknown>,
+    ctx: ToolContext,
+    capability?: ToolCapability,
+  ): Promise<ToolResult> {
     const startedAt = Date.now();
 
     try {
-      const result = await tool.call(input, ctx);
+      await this.securityGuard.checkToolPermission(tool.name, input, capability);
 
-      this.logger.info({
+      const validation = validateToolInput(tool, input);
+      if (!validation.ok) {
+        throw new ToolValidationError(formatValidationIssues(validation.issues ?? []));
+      }
+
+      const effectiveTimeoutMs = ctx.timeoutMs ?? tool.capability?.timeoutMs;
+      const rawResult = await callWithTimeout(
+        () => tool.call(input, { ...ctx, timeoutMs: effectiveTimeoutMs }),
+        effectiveTimeoutMs,
+      );
+      const result = normalizeToolResult(
+        tool,
+        rawResult,
+        ctx,
+        Date.now() - startedAt,
+      );
+
+      logger.info({
         traceId: ctx.traceId,
         toolName: tool.name,
         latencyMs: Date.now() - startedAt,
@@ -675,7 +767,7 @@ export class ToolExecutor {
 
       return result;
     } catch (error) {
-      this.logger.error({
+      logger.error({
         traceId: ctx.traceId,
         toolName: tool.name,
         error,
@@ -686,6 +778,33 @@ export class ToolExecutor {
   }
 }
 ```
+
+输入校验规则：
+
+- 工具实现了 `validateInput()` 时，优先使用工具自定义校验。
+- 否则使用工具 `schema` 的 JSON Schema 子集，当前支持 `type`、`required`、`properties`、`enum`、`additionalProperties`。
+- 校验失败抛出 `ToolValidationError`，不会进入工具业务实现。
+
+结果处理规则：
+
+- `content` 统一为字符串。
+- `capability.maxResultCharacters` 可限制工具结果长度，默认上限为 `64_000` 字符。
+- 被截断时写入 `metadata.truncated`、`originalLength`、`maxResultCharacters`、`toolName`。
+- 未知工具异常会转成 `ToolExecutionError`；工具超时会转成 `ToolTimeoutError`。
+
+### 5.3.3 工具调度超时
+
+`ToolScheduler` 除了控制并发和错误观察，还会给每次工具调用注入：
+
+```ts
+{
+  toolCallId: toolCall.id,
+  timeoutMs: options.toolTimeoutMs,
+  abortSignal: childAbortSignal,
+}
+```
+
+即使注册表没有注入 `ToolExecutor`，调度器也会在 Promise 层按 `toolTimeoutMs` 结束等待；`toolErrorMode: 'observe'` 时超时会变成 `role: 'tool'` 消息，metadata 中包含 `errorCode: 'TOOL_TIMEOUT'`。
 
 ---
 
@@ -841,17 +960,35 @@ MCP Server
 ### 5.6.1 MCP Tool Adapter
 
 ```ts
+export interface McpToolAdapterOptions {
+  namePrefix?: string;
+}
+
 export class McpToolAdapter implements Tool {
+  readonly name: string;
+  readonly description: string;
+  readonly schema: unknown;
+  readonly capability = {
+    category: 'mcp',
+    accessLevel: 'trusted',
+    source: 'mcp',
+  };
+
   constructor(
-    public readonly name: string,
-    public readonly description: string,
-    public readonly schema: unknown,
+    private readonly tool: McpTool,
     private readonly client: McpClient,
-  ) {}
+    options: McpToolAdapterOptions = {},
+  ) {
+    this.name = options.namePrefix
+      ? `${options.namePrefix}_${tool.name}`
+      : tool.name;
+    this.description = tool.description ?? tool.title ?? tool.name;
+    this.schema = tool.inputSchema;
+  }
 
   async call(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const result = await this.client.callTool({
-      name: this.name,
+      name: this.tool.name,
       arguments: input,
       traceId: ctx.traceId,
     });
@@ -865,7 +1002,7 @@ export class McpToolAdapter implements Tool {
 }
 ```
 
-这样 `runtime/` 不需要关心工具来自 MCP、本地函数，还是业务插件。
+MCP adapter 的内部 `name` 可以带 server 前缀，避免多个 MCP server 暴露同名工具时注册冲突；实际 `tools/call` 仍使用 MCP 原始工具名。adapter 的 metadata 保留 `mcpServerName`、`mcpToolName` 和结构化 MCP content。这样 `runtime/` 不需要关心工具来自 MCP、本地函数，还是业务插件。
 
 ---
 
@@ -1108,6 +1245,7 @@ reliability:
 | 字段 | 说明 |
 |---|---|
 | `maxSteps` | 单次 Agent 循环最大轮数 |
+| `toolTimeoutMs` | 单个工具调用最大等待时间，会注入 `ToolContext.timeoutMs` 并触发 `TOOL_TIMEOUT` |
 | `maxConcurrentTools` | 同一轮工具调用最大并发数 |
 | `toolErrorMode` | 工具错误处理模式，`throw` 直接抛错，`observe` 转成 tool 消息 |
 | `modelRetry` | 模型调用重试策略，仅重试 `retryable` 错误 |
