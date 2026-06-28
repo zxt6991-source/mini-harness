@@ -1,3 +1,4 @@
+// 该文件定义任务编排的基础类型，包括任务状态、任务结构和任务处理器签名。
 export type TaskStatus =
   | 'pending'
   | 'running'

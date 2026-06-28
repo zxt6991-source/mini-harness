@@ -1,3 +1,4 @@
+// 该文件实现基于 HTTP 的 MCP 客户端，负责列出工具、调用工具和解析 JSON-RPC 响应。
 import { logger } from '../reliability/logger';
 import {
   MCP_PROTOCOL_VERSION,
@@ -44,18 +45,22 @@ export interface HttpMcpClientOptions {
   headers?: Record<string, string>;
 }
 
+/** 调用运行时内置 fetch，作为 MCP HTTP 请求的默认实现。 */
 function defaultFetch(url: string, init: Parameters<McpFetch>[1]) {
   return fetch(url, init);
 }
 
+/** 判断未知值是否为非空对象，便于安全解析 JSON-RPC 响应。 */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** 判断 MCP HTTP 状态码是否适合由上层进行重试。 */
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/** 从 MCP HTTP 错误响应中读取可用于日志和异常的文本消息。 */
 async function readHttpError(response: FetchResponseLike): Promise<string> {
   try {
     return await response.text();
@@ -64,6 +69,7 @@ async function readHttpError(response: FetchResponseLike): Promise<string> {
   }
 }
 
+/** 基于 HTTP JSON-RPC 的 MCP 客户端，支持工具发现和工具调用。 */
 export class HttpMcpClient implements McpClient {
   readonly serverName: string;
 
@@ -73,6 +79,7 @@ export class HttpMcpClient implements McpClient {
   private readonly fetchFn: McpFetch;
   private nextId = 1;
 
+  /** 初始化 MCP endpoint、协议版本、超时、请求头和 fetch 实现。 */
   constructor(private readonly options: HttpMcpClientOptions) {
     this.endpoint = options.endpoint;
     this.serverName = options.serverName ?? options.endpoint;
@@ -81,11 +88,13 @@ export class HttpMcpClient implements McpClient {
     this.fetchFn = options.fetchFn ?? defaultFetch;
   }
 
+  /** 调用 MCP tools/list，按可选 cursor 拉取一页工具列表。 */
   async listTools(cursor?: string): Promise<McpListToolsResult> {
     const params = cursor ? { cursor } : {};
     return this.request<McpListToolsResult>('tools/list', params);
   }
 
+  /** 调用 MCP tools/call，执行指定工具并返回 MCP 工具结果。 */
   async callTool(input: {
     name: string;
     arguments: Record<string, unknown>;
@@ -104,6 +113,7 @@ export class HttpMcpClient implements McpClient {
     );
   }
 
+  /** 发送一条 MCP JSON-RPC 请求，处理 HTTP、超时、网络和协议层错误。 */
   private async request<T>(
     method: string,
     params: Record<string, unknown>,
@@ -160,6 +170,7 @@ export class HttpMcpClient implements McpClient {
     }
   }
 
+  /** 校验并解析 MCP JSON-RPC 响应体，返回 result 或抛出标准 MCP 错误。 */
   private parseResponse<T>(body: unknown): T {
     if (!isObject(body)) {
       throw new McpError('MCP response was not an object', 'MCP_RESPONSE_INVALID', {
@@ -184,6 +195,7 @@ export class HttpMcpClient implements McpClient {
     return response.result as T;
   }
 
+  /** 记录 MCP 请求失败日志，保留服务、工具、trace 和延迟信息。 */
   private logFailure(
     metadata: { traceId?: string; toolName?: string },
     error: McpError,

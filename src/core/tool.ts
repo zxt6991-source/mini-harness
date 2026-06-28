@@ -1,3 +1,4 @@
+// 该文件定义工具、工具结果、执行上下文和工具注册表接口，供模型调用外部能力。
 import type { Message, ToolCall } from './message';
 
 export interface ToolResult {

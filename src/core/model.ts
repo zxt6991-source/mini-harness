@@ -1,3 +1,4 @@
+// 该文件定义模型提供方接口，以及聊天输入输出、流式事件和 token 用量等核心类型。
 import type { Message, ToolCall } from './message';
 import type { Tool } from './tool';
 

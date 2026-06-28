@@ -1,3 +1,4 @@
+// 该文件负责为模型请求组装上下文，合并系统提示、摘要、相关记忆和最近消息。
 import type { Memory, Message } from '../core';
 import { createId } from '../utils/id';
 import type { Summarizer } from './summarizer';
@@ -10,6 +11,7 @@ export interface ContextBuilderOptions {
   summarizer?: Summarizer;
 }
 
+/** 创建用于注入系统提示或摘要内容的 system 消息。 */
 function createSystemMessage(content: string): Message {
   return {
     id: createId('msg'),
@@ -19,10 +21,12 @@ function createSystemMessage(content: string): Message {
   };
 }
 
+/** 统计一组消息正文的总字符数，用于控制上下文长度。 */
 function totalContentLength(messages: Message[]): number {
   return messages.reduce((total, message) => total + message.content.length, 0);
 }
 
+/** 按最大字符数裁剪上下文，优先移除非系统消息并保留当前输入。 */
 function trimContext(messages: Message[], inputId: string, maxCharacters: number): Message[] {
   const trimmed = [...messages];
 
@@ -52,17 +56,20 @@ function trimContext(messages: Message[], inputId: string, maxCharacters: number
   return trimmed;
 }
 
+/** 根据最近消息、相关检索结果和摘要构建模型请求上下文。 */
 export class ContextBuilder {
   private readonly systemPrompt: string;
   private readonly recentLimit: number;
   private readonly searchTopK: number;
 
+  /** 初始化上下文构建参数，包括系统提示、最近消息数量和检索数量。 */
   constructor(private readonly options: ContextBuilderOptions = {}) {
     this.systemPrompt = options.systemPrompt ?? 'You are MiniHarness Agent.';
     this.recentLimit = options.recentLimit ?? 20;
     this.searchTopK = options.searchTopK ?? 0;
   }
 
+  /** 从记忆中收集上下文材料，并组装成模型调用需要的消息列表。 */
   async build(memory: Memory, sessionId: string, input: Message): Promise<Message[]> {
     const recent =
       this.recentLimit > 0 ? await memory.loadRecent(sessionId, this.recentLimit) : [];
@@ -94,6 +101,7 @@ export class ContextBuilder {
       : messages;
   }
 
+  /** 基于用户输入文本拆分查询词，从记忆中查找相关历史消息。 */
   private async searchRelevant(
     memory: Memory,
     sessionId: string,

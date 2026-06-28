@@ -1,3 +1,4 @@
+// 该文件定义 MCP JSON-RPC 协议相关类型、协议版本、错误类型和请求构造函数。
 import { MiniHarnessError } from '../core';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -84,11 +85,13 @@ export interface McpErrorOptions {
   rpcCode?: number;
 }
 
+/** MCP 调用相关的标准化错误，统一携带 HTTP 状态、RPC 错误码和重试信息。 */
 export class McpError extends MiniHarnessError {
   readonly status?: number;
   readonly retryable: boolean;
   readonly rpcCode?: number;
 
+  /** 创建 MCP 错误实例，用于 HTTP、网络、超时和 JSON-RPC 层错误。 */
   constructor(message: string, code: string, options: McpErrorOptions = {}) {
     super(message, code, options.cause);
     this.name = 'McpError';
@@ -98,6 +101,7 @@ export class McpError extends MiniHarnessError {
   }
 }
 
+/** 构造标准 JSON-RPC 2.0 请求对象，供 MCP HTTP 客户端发送。 */
 export function createJsonRpcRequest(
   id: JsonRpcId,
   method: string,

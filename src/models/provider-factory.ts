@@ -1,9 +1,11 @@
+// 该文件根据运行配置创建具体模型提供方，封装 mock、OpenAI 和 DeepSeek 的选择逻辑。
 import type { ModelProvider } from '../core';
 import type { HarnessConfig } from '../utils/config';
 import { ChatCompletionsProvider } from './chat-completions-provider';
 import { MockProvider } from './mock-provider';
 import { OpenAIProvider } from './openai-provider';
 
+/** 根据配置中的 provider 字段创建对应的模型提供方实例。 */
 export function createModelProvider(config: HarnessConfig): ModelProvider {
   switch (config.model.provider) {
     case 'mock':

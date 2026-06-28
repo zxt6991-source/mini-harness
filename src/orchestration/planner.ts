@@ -1,3 +1,4 @@
+// 该文件提供简单规划器，把用户目标或显式步骤转换为可执行任务列表。
 import type { Task } from './task';
 
 export interface PlanStep {
@@ -13,7 +14,9 @@ export interface PlanInput {
   steps?: PlanStep[];
 }
 
+/** 简单任务规划器，把目标或显式步骤转换成待执行任务。 */
 export class SimplePlanner {
+  /** 根据输入目标生成任务列表，没有显式步骤时生成单任务计划。 */
   async plan(input: PlanInput): Promise<Task[]> {
     const steps =
       input.steps && input.steps.length > 0

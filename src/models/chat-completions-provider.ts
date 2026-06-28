@@ -1,3 +1,4 @@
+// 该文件实现兼容 Chat Completions 接口的模型提供方，用于 DeepSeek 等同类服务。
 import type {
   Message,
   ModelChatInput,
@@ -36,14 +37,17 @@ export interface ChatCompletionsProviderOptions {
   defaultTimeoutMs?: number;
 }
 
+/** 调用运行时内置 fetch，作为 Chat Completions 请求的默认 HTTP 实现。 */
 function defaultFetch(url: string, init: Parameters<ChatCompletionsFetch>[1]) {
   return fetch(url, init);
 }
 
+/** 将提供方名称转换为适合错误码使用的大写前缀。 */
 function errorPrefix(providerName: string): string {
   return providerName.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
 }
 
+/** 从显式参数或指定环境变量中解析模型服务 API Key。 */
 function resolveApiKey(
   providerName: string,
   apiKey: string | undefined,
@@ -63,10 +67,12 @@ function resolveApiKey(
   return resolved;
 }
 
+/** 判断 HTTP 状态码是否代表可重试错误。 */
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/** 从 Chat Completions 错误响应中尽量提取服务返回的错误消息。 */
 async function readErrorMessage(response: FetchResponseLike): Promise<string> {
   try {
     const body = (await response.json()) as unknown;
@@ -89,6 +95,7 @@ async function readErrorMessage(response: FetchResponseLike): Promise<string> {
   }
 }
 
+/** 将内部工具调用转换为 Chat Completions 的 tool_calls 项。 */
 function toChatToolCall(toolCall: NonNullable<Message['toolCalls']>[number]) {
   return {
     id: toolCall.id,
@@ -100,6 +107,7 @@ function toChatToolCall(toolCall: NonNullable<Message['toolCalls']>[number]) {
   };
 }
 
+/** 将内部消息转换为 Chat Completions messages 数组中的一项。 */
 function toChatMessage(message: Message): Record<string, unknown> {
   if (message.role === 'tool') {
     const toolCallId =
@@ -128,6 +136,7 @@ function toChatMessage(message: Message): Record<string, unknown> {
   };
 }
 
+/** 将内部工具定义转换为 Chat Completions function 工具格式。 */
 function toChatTool(tool: Tool): Record<string, unknown> {
   return {
     type: 'function',
@@ -139,6 +148,7 @@ function toChatTool(tool: Tool): Record<string, unknown> {
   };
 }
 
+/** 根据模型、消息、工具和选项构造 Chat Completions 请求体。 */
 function buildRequestBody(model: string, input: ModelChatInput): Record<string, unknown> {
   return {
     model,
@@ -150,6 +160,7 @@ function buildRequestBody(model: string, input: ModelChatInput): Record<string, 
   };
 }
 
+/** 兼容 Chat Completions 协议的模型提供方，用于接入 DeepSeek 等服务。 */
 export class ChatCompletionsProvider implements ModelProvider {
   name: string;
 
@@ -158,6 +169,7 @@ export class ChatCompletionsProvider implements ModelProvider {
   private readonly defaultTimeoutMs: number;
   private readonly errorPrefix: string;
 
+  /** 初始化提供方名称、地址、鉴权、fetch 实现和超时设置。 */
   constructor(private readonly options: ChatCompletionsProviderOptions) {
     this.name = options.name;
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -166,6 +178,7 @@ export class ChatCompletionsProvider implements ModelProvider {
     this.errorPrefix = errorPrefix(options.name);
   }
 
+  /** 调用 Chat Completions 接口并返回内部统一的模型输出。 */
   async chat(input: ModelChatInput): Promise<ModelChatOutput> {
     const apiKey = resolveApiKey(
       this.options.name,
@@ -232,6 +245,7 @@ export class ChatCompletionsProvider implements ModelProvider {
     }
   }
 
+  /** 记录 Chat Completions 请求失败信息，保留 provider、model 和 trace 维度。 */
   private logFailure(
     input: ModelChatInput,
     error: ModelProviderError,

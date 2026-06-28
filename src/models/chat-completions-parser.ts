@@ -1,3 +1,4 @@
+// 该文件解析 Chat Completions 返回值，将 assistant 内容、工具调用和 token 用量归一化。
 import type { ModelChatOutput, TokenUsage, ToolCall } from '../core';
 import { ModelProviderError } from '../core';
 import { createId } from '../utils/id';
@@ -31,10 +32,12 @@ interface ChatCompletionResponse {
   usage?: ChatCompletionUsage;
 }
 
+/** 判断未知值是否为非空对象，便于安全解析第三方响应。 */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** 将 Chat Completions usage 字段转换为内部 token 用量结构。 */
 function parseUsage(usage: ChatCompletionUsage | undefined): TokenUsage | undefined {
   if (!usage) {
     return undefined;
@@ -49,6 +52,7 @@ function parseUsage(usage: ChatCompletionUsage | undefined): TokenUsage | undefi
   };
 }
 
+/** 解析单个 Chat Completions 工具调用参数，并要求参数 JSON 为对象。 */
 function parseToolArguments(toolCall: ChatCompletionToolCall): Record<string, unknown> {
   if (typeof toolCall.function?.arguments !== 'string') {
     return {};
@@ -71,6 +75,7 @@ function parseToolArguments(toolCall: ChatCompletionToolCall): Record<string, un
   }
 }
 
+/** 从 Chat Completions 的 tool_calls 字段中提取内部工具调用列表。 */
 function parseToolCalls(toolCalls: unknown): ToolCall[] {
   if (!Array.isArray(toolCalls)) {
     return [];
@@ -87,6 +92,7 @@ function parseToolCalls(toolCalls: unknown): ToolCall[] {
     }));
 }
 
+/** 将 Chat Completions 原始响应解析为内部统一的模型输出。 */
 export function parseChatCompletionResponse(response: unknown): ModelChatOutput {
   if (!isObject(response)) {
     throw new ModelProviderError(

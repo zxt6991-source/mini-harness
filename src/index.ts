@@ -1,3 +1,4 @@
+// 该文件统一导出 MiniHarness 的公共 API，方便外部以包入口方式引用各模块能力。
 export * from './core';
 export * from './runtime/engine';
 export * from './memory/context-builder';

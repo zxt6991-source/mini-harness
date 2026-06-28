@@ -1,3 +1,4 @@
+// 该文件负责加载 .env 和 YAML 配置，并用 zod 校验生成 MiniHarness 运行配置。
 import { readFile } from 'node:fs/promises';
 import { parse } from 'yaml';
 import { z } from 'zod';
@@ -64,6 +65,7 @@ export interface LoadHarnessConfigOptions {
   envPath?: string | false;
 }
 
+/** 移除 .env 值中的行内注释，同时保留引号内的 # 字符。 */
 function stripInlineComment(value: string): string {
   let quote: '"' | "'" | undefined;
   let escaped = false;
@@ -99,6 +101,7 @@ function stripInlineComment(value: string): string {
   return value;
 }
 
+/** 去除 .env 值的外层引号，并处理双引号字符串中的常见转义字符。 */
 function unquoteEnvValue(value: string): string {
   const trimmed = stripInlineComment(value).trim();
   const quote = trimmed[0];
@@ -125,6 +128,7 @@ function unquoteEnvValue(value: string): string {
   return trimmed;
 }
 
+/** 解析一行 .env 内容，返回合法的键值对或忽略空行、注释和非法行。 */
 function parseEnvLine(line: string): [string, string] | undefined {
   const trimmed = line.trim();
 
@@ -150,6 +154,7 @@ function parseEnvLine(line: string): [string, string] | undefined {
   return [key, unquoteEnvValue(assignment.slice(equalsIndex + 1))];
 }
 
+/** 加载 .env 文件，将尚未存在于 process.env 的变量写入当前进程环境。 */
 export async function loadEnvFile(path = '.env'): Promise<boolean> {
   let raw: string;
 
@@ -180,6 +185,7 @@ export async function loadEnvFile(path = '.env'): Promise<boolean> {
   return true;
 }
 
+/** 加载 MiniHarness YAML 配置，并在读取配置前按需加载 .env 文件。 */
 export async function loadHarnessConfig(
   path = 'configs/harness.yaml',
   options: LoadHarnessConfigOptions = {},
