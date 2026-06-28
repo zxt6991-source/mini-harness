@@ -5,7 +5,7 @@ runtime:
   enableStream: false
 
 model:
-  provider: mock
+  provider: deepseek
   openai:
     model: gpt-5.5
     apiKeyEnv: OPENAI_API_KEY
