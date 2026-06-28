@@ -808,9 +808,9 @@ export class ToolExecutor {
 
 ---
 
-## 5.4 `memory/` 记忆子系统
+## 5.4 `memory/` 记忆与上下文子系统
 
-记忆模块负责保存历史消息、读取相关上下文、压缩长会话。
+记忆模块负责保存历史消息、读取相关上下文、维护长期记忆条目，并在会话结束后把高价值信息整合为可检索的 Markdown frontmatter 记忆。
 
 ### 5.4.1 Memory 接口
 
@@ -824,67 +824,139 @@ export interface Memory {
 
   buildContext(sessionId: string, input: Message): Promise<Message[]>;
 }
+
+export interface MemoryRunEndEvent {
+  sessionId: string;
+  traceId: string;
+  userMessage: Message;
+  finalMessage?: Message;
+  terminationReason?: string;
+  snapshot?: Record<string, unknown>;
+}
+
+export interface MemoryLifecycle {
+  onRunEnd(event: MemoryRunEndEvent): Promise<void>;
+}
 ```
 
-### 5.4.2 上下文组装策略
+`Engine` 仍只依赖 `Memory`。当 memory 实现同时提供 `MemoryLifecycle` 时，`Engine` 会在成功结束时调用 `onRunEnd()`，用于异步整合、索引更新或审计记录。
 
-推荐上下文顺序：
+### 5.4.2 长期 MemoryEntry
+
+长期记忆以 `MemoryEntry` 为基本单元：
+
+```ts
+export type MemoryEntryType =
+  | 'user'
+  | 'feedback'
+  | 'project'
+  | 'reference'
+  | 'episodic'
+  | 'lesson';
+
+export interface MemoryEntry {
+  id: string;
+  type: MemoryEntryType;
+  content: string;
+  tags: string[];
+  confidence: number;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+  lastAccessedAt?: number;
+  expiryAt?: number;
+  sourceSessionId?: string;
+  sourceMessageIds?: string[];
+  metadata?: Record<string, unknown>;
+}
+```
+
+`MarkdownMemoryStore` 将条目保存到：
+
+```text
+.miniharness/memory/
+  by_type/
+    user/
+    feedback/
+    project/
+    reference/
+    episodic/
+    lesson/
+  session_logs/
+```
+
+每个条目使用 Markdown + YAML frontmatter：
+
+```markdown
+---
+id: mem_xxx
+type: project
+version: 1
+confidence: 0.8
+tags:
+  - project_context
+createdAt: 1782640000000
+updatedAt: 1782640000000
+---
+
+# 记忆内容
+
+MiniHarness 的 runtime 入口是 `Engine.runEvents()`。
+```
+
+写入时使用临时文件加 `rename()` 做原子替换；更新时支持 `expectedVersion` 乐观锁，冲突抛出 `MemoryVersionConflictError`。
+
+### 5.4.3 上下文组装策略
+
+`ContextBuilder` 保持兼容，但增加长期记忆检索能力。推荐上下文顺序：
 
 ```text
 System Prompt
   +
-长期用户偏好
+Conversation summary
   +
-相关历史记忆
+Relevant memory（长期 MemoryEntry）
+  +
+相关历史消息
   +
 最近 N 轮对话
   +
 当前用户输入
 ```
 
-第一版可以先实现本地内存存储：
+需求分析通过 `analyzeContextRequirement()` 完成，使用中英文关键词识别用户偏好、项目上下文、历史、参考资料、反馈和错误教训。无法识别时默认加载 user/project/episodic 三类上下文，避免新会话过薄。
+
+`ContextCache` 提供 TTL 缓存和 tag 失效，后续可用于缓存静态用户档案和参考资料。当前字符预算仍由 `ContextBuilder.maxContextCharacters` 控制，保护系统提示和当前输入不被动态记忆挤掉。
+
+### 5.4.4 组合式 Memory 实现
 
 ```ts
-export class InMemoryStore implements Memory {
-  private readonly sessions = new Map<string, Message[]>();
-
-  async save(sessionId: string, message: Message): Promise<void> {
-    const messages = this.sessions.get(sessionId) ?? [];
-    messages.push(message);
-    this.sessions.set(sessionId, messages);
-  }
-
-  async loadRecent(sessionId: string, limit: number): Promise<Message[]> {
-    const messages = this.sessions.get(sessionId) ?? [];
-    return messages.slice(-limit);
-  }
-
-  async search(sessionId: string, query: string, topK: number): Promise<Message[]> {
-    const messages = this.sessions.get(sessionId) ?? [];
-    return messages
-      .filter((m) => m.content.includes(query))
-      .slice(0, topK);
-  }
-
-  async buildContext(sessionId: string, input: Message): Promise<Message[]> {
-    const recent = await this.loadRecent(sessionId, 20);
-    return [
-      createSystemMessage('You are MiniHarness Agent.'),
-      ...recent,
-      input,
-    ];
-  }
-}
+const memory = createMemory(config.memory);
 ```
 
-后续可以升级为：
+`createMemory()` 会组装：
+
+- `InMemoryStore`：当前进程内 recent/search 消息存储。
+- `SessionLogStore`：追加 JSONL 原始消息日志，用于审计和整合。
+- `MarkdownMemoryStore`：按类型保存长期 `MemoryEntry`。
+- `ContextBuilder`：组装模型上下文。
+- `ConsolidationEngine`：在 `onRunEnd()` 中按触发门执行整合。
+
+### 5.4.5 自动整合
+
+`ConsolidationEngine` 采用轻量三门触发：
+
+- 时间门：距上次整合超过 `timeGateMs`。
+- 会话门：距上次整合完成 `sessionGate` 次 run。
+- 显式门：用户输入包含“记住这个”“保存进度”“consolidate”等信号。
+
+整合流程为：
 
 ```text
-SQLite 本地存储
-  -> 向量检索
-  -> 摘要记忆
-  -> 多会话记忆隔离
+Orient -> Gather -> Consolidate -> Prune
 ```
+
+当前实现使用确定性启发式，不额外调用模型：用户偏好写入 `user`，项目进展写入 `project`，错误和失败教训写入 `lesson`。整合失败只记录日志，不影响主回复。
 
 ---
 
@@ -1198,6 +1270,7 @@ model:
 
 memory:
   type: local
+  rootDir: .miniharness/memory
   recentLimit: 20
   searchTopK: 5
   summary:
@@ -1206,6 +1279,28 @@ memory:
   context:
     systemPrompt: You are MiniHarness Agent.
     maxContextCharacters: 12000
+    protectedCharacters: 2000
+    minSectionCharacters: 200
+    cache:
+      enabled: true
+      staticTtlMs: 600000
+      dynamicTtlMs: 30000
+  consolidation:
+    enabled: true
+    timeGateMs: 86400000
+    sessionGate: 5
+    contextUtilizationGate: 0.7
+    minMessages: 8
+    prune:
+      expiredEntries: true
+      lowConfidenceThreshold: 0.3
+      staleDays: 30
+  index:
+    keyword:
+      enabled: true
+      minTokenLength: 2
+    vector:
+      enabled: false
 
 tools:
   enableBuiltin: true
@@ -1290,7 +1385,7 @@ reliability:
 
 ```ts
 import { Engine } from './runtime/engine';
-import { InMemoryStore } from './memory/local-store';
+import { createMemory } from './memory/factory';
 import { createModelProvider } from './models/provider-factory';
 import { DefaultToolRegistry } from './tools/registry';
 import { loadHarnessConfig } from './utils/config';
@@ -1298,7 +1393,7 @@ import { loadHarnessConfig } from './utils/config';
 async function main() {
   const config = await loadHarnessConfig();
   const model = createModelProvider(config);
-  const memory = new InMemoryStore();
+  const memory = createMemory(config.memory);
   const tools = new DefaultToolRegistry();
 
   const engine = new Engine(model, memory, tools, {

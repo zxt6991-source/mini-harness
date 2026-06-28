@@ -7,3 +7,16 @@ export interface Memory {
   search(sessionId: string, query: string, topK: number): Promise<Message[]>;
   buildContext(sessionId: string, input: Message): Promise<Message[]>;
 }
+
+export interface MemoryRunEndEvent {
+  sessionId: string;
+  traceId: string;
+  userMessage: Message;
+  finalMessage?: Message;
+  terminationReason?: string;
+  snapshot?: Record<string, unknown>;
+}
+
+export interface MemoryLifecycle {
+  onRunEnd(event: MemoryRunEndEvent): Promise<void>;
+}

@@ -35,6 +35,7 @@ model:
 
 memory:
   type: local
+  rootDir: .miniharness/memory
   recentLimit: 20
   searchTopK: 5
   summary:
@@ -43,6 +44,28 @@ memory:
   context:
     systemPrompt: You are MiniHarness Agent.
     maxContextCharacters: 12000
+    protectedCharacters: 2000
+    minSectionCharacters: 200
+    cache:
+      enabled: true
+      staticTtlMs: 600000
+      dynamicTtlMs: 30000
+  consolidation:
+    enabled: true
+    timeGateMs: 86400000
+    sessionGate: 5
+    contextUtilizationGate: 0.7
+    minMessages: 8
+    prune:
+      expiredEntries: true
+      lowConfidenceThreshold: 0.3
+      staleDays: 30
+  index:
+    keyword:
+      enabled: true
+      minTokenLength: 2
+    vector:
+      enabled: false
 
 tools:
   enableBuiltin: true

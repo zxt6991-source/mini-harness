@@ -1,6 +1,8 @@
 // 该文件实现 Agent 主循环，负责串联模型、记忆和工具调用直到生成最终回复。
 import type {
   Memory,
+  MemoryLifecycle,
+  MemoryRunEndEvent,
   Message,
   ModelChatOutput,
   ModelProvider,
@@ -74,6 +76,22 @@ function getRetryable(error: unknown): boolean | undefined {
     typeof error.retryable === 'boolean'
     ? error.retryable
     : undefined;
+}
+
+function hasMemoryLifecycle(memory: Memory): memory is Memory & MemoryLifecycle {
+  return (
+    'onRunEnd' in memory &&
+    typeof (memory as { onRunEnd?: unknown }).onRunEnd === 'function'
+  );
+}
+
+async function notifyMemoryRunEnd(
+  memory: Memory,
+  event: MemoryRunEndEvent,
+): Promise<void> {
+  if (hasMemoryLifecycle(memory)) {
+    await memory.onRunEnd(event);
+  }
 }
 
 /** Agent 运行时引擎，负责驱动模型回复、工具调用和记忆写入的完整循环。 */
@@ -269,6 +287,15 @@ export class Engine {
         await this.memory.save(sessionId, assistantMessage);
         state.messages.push(assistantMessage);
         state.terminationReason = 'no_tool_calls';
+
+        await notifyMemoryRunEnd(this.memory, {
+          sessionId,
+          traceId: state.traceId,
+          userMessage,
+          finalMessage: assistantMessage,
+          terminationReason: state.terminationReason,
+          snapshot: snapshotRunState(state) as unknown as Record<string, unknown>,
+        });
 
         yield createEngineEvent({
           type: 'agent_end',

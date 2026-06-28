@@ -34,6 +34,13 @@ model:
       model: {
         provider: 'mock',
       },
+      memory: {
+        type: 'local',
+        rootDir: '.miniharness/memory',
+        consolidation: {
+          enabled: true,
+        },
+      },
     });
     expect(createModelProvider(config)).toBeInstanceOf(MockProvider);
   });

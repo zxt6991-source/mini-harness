@@ -1,6 +1,6 @@
 # MiniHarness
 
-MiniHarness is a lightweight TypeScript Agent Harness. The current version runs a minimal agent loop with in-memory session storage, mock and OpenAI-compatible model providers, MCP HTTP tool adapters, task orchestration, tool registration, security checks, structured tool logs, and configurable context assembly.
+MiniHarness is a lightweight TypeScript Agent Harness. The current version runs a minimal agent loop with configurable memory, Markdown frontmatter long-term memory entries, mock and OpenAI-compatible model providers, MCP HTTP tool adapters, task orchestration, tool registration, security checks, structured tool logs, and configurable context assembly.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ pnpm build
 ```text
 src/core/          Shared interfaces and errors
 src/runtime/       Agent loop engine
-src/memory/        In-memory message store, context builder, summarizer
+src/memory/        Message store, Markdown memory entries, context builder, consolidation
 src/mcp/           HTTP MCP client, discovery, tool adapter
 src/models/        Mock provider, OpenAI provider, Chat Completions provider, parsers, quality gate
 src/orchestration/ Task graph, planner, state machine, coordinator
@@ -53,7 +53,13 @@ Implemented:
 
 - Message, Tool, ModelProvider, Memory interfaces
 - InMemoryStore
+- MarkdownMemoryStore
+- ConsolidatingMemory
+- SessionLogStore
 - ContextBuilder
+- ContextRequirement analyzer
+- ContextCache
+- ConsolidationEngine
 - SimpleSummarizer
 - MockProvider
 - OpenAIProvider
@@ -80,6 +86,7 @@ Implemented:
 Not implemented yet:
 
 - SQLite memory persistence
+- Vector memory index
 - MCP stdio transport, SSE streaming, initialization/session lifecycle
 - Persistent orchestration state
 - Real multi-process or networked agent workers
@@ -130,6 +137,28 @@ DEEPSEEK_API_KEY=sk-<redacted>
 `loadHarnessConfig()` reads `.env` automatically before creating the configured provider. Values already set in the shell take precedence over `.env` values.
 
 The default configuration still uses `provider: mock`, so local development and tests do not require a real model API key.
+
+## Memory and Context
+
+`createMemory(config.memory)` builds the configured memory implementation. The default `local` memory keeps recent messages in process memory, appends raw messages to `.miniharness/memory/session_logs/*.jsonl`, and stores long-term memories as Markdown files with YAML frontmatter under `.miniharness/memory/by_type/`.
+
+```yaml
+memory:
+  type: local
+  rootDir: .miniharness/memory
+  recentLimit: 20
+  searchTopK: 5
+  context:
+    systemPrompt: You are MiniHarness Agent.
+    maxContextCharacters: 12000
+  consolidation:
+    enabled: true
+    sessionGate: 5
+```
+
+`ContextBuilder` still supports the existing system prompt, summary, relevant message search, recent messages, and current input order. When the memory implementation exposes long-term entry search, it also injects a `Relevant memory` system section before recent messages.
+
+`ConsolidationEngine` runs from the optional memory lifecycle hook after successful runs. It uses lightweight local heuristics for explicit memory signals such as “记住这个” or “保存进度”, project updates, and error lessons. It does not require an extra model call.
 
 ## MCP Integration
 

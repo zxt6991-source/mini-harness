@@ -117,10 +117,168 @@ const modelConfigSchema = z
     },
   });
 
+const memorySummaryConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxSummaryCharacters: z.number().int().positive().default(500),
+  })
+  .default({
+    enabled: true,
+    maxSummaryCharacters: 500,
+  });
+
+const memoryContextCacheConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    staticTtlMs: z.number().int().positive().default(600_000),
+    dynamicTtlMs: z.number().int().positive().default(30_000),
+  })
+  .default({
+    enabled: true,
+    staticTtlMs: 600_000,
+    dynamicTtlMs: 30_000,
+  });
+
+const memoryContextConfigSchema = z
+  .object({
+    systemPrompt: z.string().default('You are MiniHarness Agent.'),
+    maxContextCharacters: z.number().int().positive().default(12_000),
+    protectedCharacters: z.number().int().positive().default(2_000),
+    minSectionCharacters: z.number().int().positive().default(200),
+    cache: memoryContextCacheConfigSchema,
+  })
+  .default({
+    systemPrompt: 'You are MiniHarness Agent.',
+    maxContextCharacters: 12_000,
+    protectedCharacters: 2_000,
+    minSectionCharacters: 200,
+    cache: {
+      enabled: true,
+      staticTtlMs: 600_000,
+      dynamicTtlMs: 30_000,
+    },
+  });
+
+const memoryConsolidationConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    timeGateMs: z.number().int().positive().default(86_400_000),
+    sessionGate: z.number().int().positive().default(5),
+    contextUtilizationGate: z.number().positive().default(0.7),
+    minMessages: z.number().int().positive().default(8),
+    prune: z
+      .object({
+        expiredEntries: z.boolean().default(true),
+        lowConfidenceThreshold: z.number().min(0).max(1).default(0.3),
+        staleDays: z.number().int().positive().default(30),
+      })
+      .default({
+        expiredEntries: true,
+        lowConfidenceThreshold: 0.3,
+        staleDays: 30,
+      }),
+  })
+  .default({
+    enabled: true,
+    timeGateMs: 86_400_000,
+    sessionGate: 5,
+    contextUtilizationGate: 0.7,
+    minMessages: 8,
+    prune: {
+      expiredEntries: true,
+      lowConfidenceThreshold: 0.3,
+      staleDays: 30,
+    },
+  });
+
+const memoryIndexConfigSchema = z
+  .object({
+    keyword: z
+      .object({
+        enabled: z.boolean().default(true),
+        minTokenLength: z.number().int().positive().default(2),
+      })
+      .default({
+        enabled: true,
+        minTokenLength: 2,
+      }),
+    vector: z
+      .object({
+        enabled: z.boolean().default(false),
+      })
+      .default({
+        enabled: false,
+      }),
+  })
+  .default({
+    keyword: {
+      enabled: true,
+      minTokenLength: 2,
+    },
+    vector: {
+      enabled: false,
+    },
+  });
+
+const memoryConfigSchema = z
+  .object({
+    type: z.enum(['local', 'in-memory']).default('local'),
+    rootDir: z.string().default('.miniharness/memory'),
+    recentLimit: z.number().int().nonnegative().default(20),
+    searchTopK: z.number().int().nonnegative().default(5),
+    summary: memorySummaryConfigSchema,
+    context: memoryContextConfigSchema,
+    consolidation: memoryConsolidationConfigSchema,
+    index: memoryIndexConfigSchema,
+  })
+  .default({
+    type: 'local',
+    rootDir: '.miniharness/memory',
+    recentLimit: 20,
+    searchTopK: 5,
+    summary: {
+      enabled: true,
+      maxSummaryCharacters: 500,
+    },
+    context: {
+      systemPrompt: 'You are MiniHarness Agent.',
+      maxContextCharacters: 12_000,
+      protectedCharacters: 2_000,
+      minSectionCharacters: 200,
+      cache: {
+        enabled: true,
+        staticTtlMs: 600_000,
+        dynamicTtlMs: 30_000,
+      },
+    },
+    consolidation: {
+      enabled: true,
+      timeGateMs: 86_400_000,
+      sessionGate: 5,
+      contextUtilizationGate: 0.7,
+      minMessages: 8,
+      prune: {
+        expiredEntries: true,
+        lowConfidenceThreshold: 0.3,
+        staleDays: 30,
+      },
+    },
+    index: {
+      keyword: {
+        enabled: true,
+        minTokenLength: 2,
+      },
+      vector: {
+        enabled: false,
+      },
+    },
+  });
+
 const harnessConfigSchema = z
   .object({
     runtime: runtimeConfigSchema,
     model: modelConfigSchema,
+    memory: memoryConfigSchema,
   })
   .passthrough();
 

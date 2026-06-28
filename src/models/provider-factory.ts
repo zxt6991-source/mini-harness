@@ -6,7 +6,9 @@ import { MockProvider } from './mock-provider';
 import { OpenAIProvider } from './openai-provider';
 
 /** 根据配置中的 provider 字段创建对应的模型提供方实例。 */
-export function createModelProvider(config: HarnessConfig): ModelProvider {
+export function createModelProvider(
+  config: Pick<HarnessConfig, 'model' | 'runtime'>,
+): ModelProvider {
   switch (config.model.provider) {
     case 'mock':
       return new MockProvider();

@@ -1,5 +1,5 @@
 // 该文件是本地运行 MiniHarness 的示例入口，负责加载配置并启动一次引擎调用。
-import { InMemoryStore } from './memory/local-store';
+import { createMemory } from './memory/factory';
 import { createModelProvider } from './models/provider-factory';
 import { Engine } from './runtime/engine';
 import { DefaultToolRegistry } from './tools/registry';
@@ -9,7 +9,7 @@ import { loadHarnessConfig } from './utils/config';
 async function main() {
   const config = await loadHarnessConfig();
   const model = createModelProvider(config);
-  const memory = new InMemoryStore();
+  const memory = createMemory(config.memory);
   const tools = new DefaultToolRegistry();
 
   const engine = new Engine(model, memory, tools, {

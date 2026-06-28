@@ -2,6 +2,8 @@
 import type { Memory, Message } from '../core';
 import { createId } from '../utils/id';
 import type { Summarizer } from './summarizer';
+import { analyzeContextRequirement } from './context-requirement';
+import type { MemorySearchHit, MemorySearchQuery } from './types';
 
 export interface ContextBuilderOptions {
   systemPrompt?: string;
@@ -56,6 +58,23 @@ function trimContext(messages: Message[], inputId: string, maxCharacters: number
   return trimmed;
 }
 
+interface LongTermMemorySearch {
+  searchEntries(query: MemorySearchQuery): Promise<MemorySearchHit[]>;
+}
+
+function canSearchEntries(memory: Memory): memory is Memory & LongTermMemorySearch {
+  return (
+    'searchEntries' in memory &&
+    typeof (memory as { searchEntries?: unknown }).searchEntries === 'function'
+  );
+}
+
+function formatLongTermMemory(hits: MemorySearchHit[]): string {
+  return hits
+    .map((hit) => `- [${hit.entry.type}] ${hit.entry.content}`)
+    .join('\n');
+}
+
 /** 根据最近消息、相关检索结果和摘要构建模型请求上下文。 */
 export class ContextBuilder {
   private readonly systemPrompt: string;
@@ -74,6 +93,7 @@ export class ContextBuilder {
     const recent =
       this.recentLimit > 0 ? await memory.loadRecent(sessionId, this.recentLimit) : [];
     const relevant = await this.searchRelevant(memory, sessionId, input);
+    const longTermMemory = await this.searchLongTermMemory(memory, sessionId, input);
     const summary = this.options.summarizer
       ? await this.options.summarizer.summarize(recent)
       : '';
@@ -82,6 +102,12 @@ export class ContextBuilder {
 
     if (summary.length > 0) {
       messages.push(createSystemMessage(`Conversation summary: ${summary}`));
+    }
+
+    if (longTermMemory.length > 0) {
+      messages.push(
+        createSystemMessage(`Relevant memory:\n${formatLongTermMemory(longTermMemory)}`),
+      );
     }
 
     const seen = new Set<string>();
@@ -139,5 +165,30 @@ export class ContextBuilder {
     }
 
     return results;
+  }
+
+  /** 检索长期记忆条目；普通 Memory 实现不提供该能力时自动跳过。 */
+  private async searchLongTermMemory(
+    memory: Memory,
+    sessionId: string,
+    input: Message,
+  ): Promise<MemorySearchHit[]> {
+    if (
+      !canSearchEntries(memory) ||
+      this.searchTopK <= 0 ||
+      input.content.trim().length === 0
+    ) {
+      return [];
+    }
+
+    const requirement = analyzeContextRequirement(input.content);
+
+    return memory.searchEntries({
+      sessionId,
+      query: input.content,
+      topK: this.searchTopK,
+      types: requirement.explicitTypes.length > 0 ? requirement.explicitTypes : undefined,
+      minConfidence: 0.1,
+    });
   }
 }
