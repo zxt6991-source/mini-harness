@@ -22,6 +22,16 @@ runtime:
 
 model:
   provider: deepseek
+  selection:
+    enabled: false
+    failureThreshold: 3
+    resetTimeoutMs: 60000
+    fallbackChain: []
+  reasoning:
+    strategy: disabled
+    complexityThreshold: medium
+    maxReasoningTokensPerSession: 100000
+    maxReasoningCostPerSession: 0
   openai:
     model: gpt-5.5
     apiKeyEnv: OPENAI_API_KEY
@@ -32,6 +42,18 @@ model:
     baseUrl: https://api.deepseek.com
   temperature: 0.2
   maxTokens: 4096
+
+outputGovernance:
+  enabled: true
+  mode: observe
+  maxCorrectionTurns: 1
+  allowUnknownTools: false
+  strictAdditionalProperties: true
+  injectionPatterns:
+    - "rm -rf"
+    - "DROP TABLE"
+    - "<script"
+    - "${jndi:"
 
 memory:
   type: local

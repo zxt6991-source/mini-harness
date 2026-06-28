@@ -74,6 +74,65 @@ describe('ToolExecutor pipeline', () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it('validates numeric ranges from JSON schema before calling the tool', async () => {
+    const call = vi.fn(async (): Promise<ToolResult> => ({
+      success: true,
+      content: 'called',
+    }));
+    const tool: Tool = {
+      name: 'range',
+      description: 'Range',
+      schema: {
+        type: 'object',
+        properties: {
+          count: { type: 'integer', minimum: 1, maximum: 5 },
+        },
+        required: ['count'],
+      },
+      call,
+    };
+
+    await expect(
+      createExecutor().execute(tool, { count: 10 }, ctx),
+    ).rejects.toMatchObject({
+      code: 'TOOL_VALIDATION_ERROR',
+      message: expect.stringContaining('must be <= 5'),
+    });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('validates string length and pattern from JSON schema before calling the tool', async () => {
+    const call = vi.fn(async (): Promise<ToolResult> => ({
+      success: true,
+      content: 'called',
+    }));
+    const tool: Tool = {
+      name: 'slug',
+      description: 'Slug',
+      schema: {
+        type: 'object',
+        properties: {
+          value: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 8,
+            pattern: '^[a-z]+$',
+          },
+        },
+        required: ['value'],
+      },
+      call,
+    };
+
+    await expect(
+      createExecutor().execute(tool, { value: 'AB' }, ctx),
+    ).rejects.toMatchObject({
+      code: 'TOOL_VALIDATION_ERROR',
+      message: expect.stringContaining('length must be >= 3'),
+    });
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it(
     'times out slow tools using the tool context timeout',
     async () => {

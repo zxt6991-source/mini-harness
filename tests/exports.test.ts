@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   ChatCompletionsProvider,
   ConsolidatingMemory,
+  ModelOutputGovernance,
   MarkdownMemoryStore,
+  ProviderRouter,
+  ReasoningBudgetManager,
   createModelProvider,
   createMemory,
+  evaluateOutput,
   loadHarnessConfig,
   parseChatCompletionResponse,
+  suggestToolName,
 } from '../src';
 
 describe('public exports', () => {
@@ -18,5 +23,10 @@ describe('public exports', () => {
     expect(createMemory).toBeTypeOf('function');
     expect(loadHarnessConfig).toBeTypeOf('function');
     expect(parseChatCompletionResponse).toBeTypeOf('function');
+    expect(ModelOutputGovernance).toBeTypeOf('function');
+    expect(ProviderRouter).toBeTypeOf('function');
+    expect(ReasoningBudgetManager).toBeTypeOf('function');
+    expect(evaluateOutput).toBeTypeOf('function');
+    expect(suggestToolName).toBeTypeOf('function');
   });
 });

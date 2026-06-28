@@ -124,16 +124,24 @@ MiniHarness/
 │   │   └── summarizer.ts
 │   │
 │   ├── models/
-│   │   ├── provider.ts
 │   │   ├── mock-provider.ts
 │   │   ├── openai-provider.ts
+│   │   ├── chat-completions-provider.ts
 │   │   ├── parser.ts
-│   │   └── quality-gate.ts
+│   │   ├── chat-completions-parser.ts
+│   │   ├── quality-gate.ts
+│   │   ├── output-governance.ts
+│   │   ├── hallucination.ts
+│   │   ├── circuit-breaker.ts
+│   │   ├── provider-router.ts
+│   │   ├── reasoning-budget.ts
+│   │   └── provider-factory.ts
 │   │
 │   ├── orchestration/
 │   │   ├── planner.ts
 │   │   ├── state-machine.ts
 │   │   ├── coordinator.ts
+│   │   ├── evaluator.ts
 │   │   └── graph.ts
 │   │
 │   ├── mcp/
@@ -304,23 +312,33 @@ export interface ModelChatInput {
   messages: Message[];
   tools?: Tool[];
   options?: ModelOptions;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ModelChatOutput {
   message: Message;
   usage?: TokenUsage;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ModelOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoning?: ReasoningOptions;
+}
+
+export interface ReasoningOptions {
+  strategy: 'disabled' | 'adaptive' | 'budget_based' | 'required';
+  effort?: 'low' | 'medium' | 'high' | 'max';
 }
 
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
 }
 
 export interface ModelStreamEvent {
@@ -356,8 +374,8 @@ for await (const event of provider.stream(input)) {
 
 | 文件 | 职责 |
 |---|---|
-| `engine.ts` | Agent 主循环，串联模型、记忆、工具、预算、重试、漂移检测和事件发射 |
-| `events.ts` | 定义运行时事件协议，如 `agent_start`、`model_message`、`tool_result`、`runtime_error` |
+| `engine.ts` | Agent 主循环，串联模型、记忆、输出治理、工具、预算、重试、漂移检测和事件发射 |
+| `events.ts` | 定义运行时事件协议，如 `agent_start`、`model_message`、`output_governance`、`model_correction`、`tool_result`、`runtime_error` |
 | `state.ts` | 定义 `RunState`、`RunSnapshot`、终止原因和运行取消错误 |
 | `tool-scheduler.ts` | 并发调度一批工具调用，并按原始 tool call 顺序归并结果 |
 | `retry.ts` | 模型调用重试策略，基于 `retryable` 错误标记做指数退避 |
@@ -377,6 +395,7 @@ export interface EngineOptions {
   modelRetry?: RetryPolicyOptions;
   budget?: Partial<RuntimeBudget>;
   drift?: DriftGuardOptions;
+  outputGovernance?: ModelOutputGovernance;
 }
 
 export interface EngineRunOptions {
@@ -420,6 +439,8 @@ export type EngineEvent =
   | ModelStartEvent
   | ModelDeltaEvent
   | ModelMessageEvent
+  | OutputGovernanceEvent
+  | ModelCorrectionEvent
   | ToolStartEvent
   | ToolResultEvent
   | TurnEndEvent
@@ -435,6 +456,8 @@ export type EngineEvent =
 | `turn_start` | 新一轮 Agent 循环开始 |
 | `model_start` | 即将调用模型 |
 | `model_message` | 模型 Assistant 消息定稿 |
+| `output_governance` | 模型输出治理报告，包含通过和拒绝的工具调用数量 |
+| `model_correction` | 治理层把被拒绝工具调用转成 tool 观察消息 |
 | `tool_start` | 某个工具调用开始 |
 | `tool_result` | 某个工具调用结束，包含成功状态和耗时 |
 | `turn_end` | 一轮包含工具调用的循环结束 |
@@ -477,6 +500,14 @@ export interface RunSnapshot {
       -> model.chat()，必要时按 retry 策略重试
       -> model_message
       -> abort 检查
+      -> ModelOutputGovernance 校验 toolCalls
+      -> 如果治理失败且 mode=throw
+          -> output_governance
+          -> runtime_error
+          -> 抛出错误
+      -> 如果治理失败且 mode=observe
+          -> 追加 model_correction / tool 观察消息
+          -> 下一轮模型自修正
       -> 如果无 toolCalls
           -> 保存 assistant
           -> agent_end
@@ -499,6 +530,7 @@ export interface RunSnapshot {
 5. `toolErrorMode: observe` 可以将工具错误转成 `role: 'tool'` 消息，让模型下一轮恢复。
 6. `AbortSignal` 在模型调用前、模型消息后、工具执行前等安全点生效。
 7. `DriftGuard` 通过重复工具调用检测和工具调用总数上限降低循环漂移风险。
+8. `ModelOutputGovernance` 在工具执行前拦截未知工具、非法参数和注入模式；通过的调用进入 `ToolScheduler`，拒绝的调用可作为纠正观察回填给模型。
 
 ### 5.2.5 工具调度与错误观察
 
@@ -782,7 +814,7 @@ export class ToolExecutor {
 输入校验规则：
 
 - 工具实现了 `validateInput()` 时，优先使用工具自定义校验。
-- 否则使用工具 `schema` 的 JSON Schema 子集，当前支持 `type`、`required`、`properties`、`enum`、`additionalProperties`。
+- 否则使用工具 `schema` 的 JSON Schema 子集，当前支持 `type`、`required`、`properties`、`enum`、`additionalProperties`、`minimum`、`maximum`、`minLength`、`maxLength`、`pattern`、`minItems`、`maxItems`。
 - 校验失败抛出 `ToolValidationError`，不会进入工具业务实现。
 
 结果处理规则：
@@ -960,9 +992,9 @@ Orient -> Gather -> Consolidate -> Prune
 
 ---
 
-## 5.5 `models/` 模型集成
+## 5.5 `models/` 模型集成与输出治理
 
-模型模块对外只暴露统一的 `ModelProvider`。
+模型模块对外只暴露统一的 `ModelProvider`，并在 Provider 返回后、工具执行前提供输出治理能力。模型层不执行工具，只负责协议适配、响应解析、Provider 路由、质量门控、工具幻觉检测和 reasoning 策略决策。
 
 ### 5.5.1 Mock Provider
 
@@ -987,7 +1019,7 @@ export class MockProvider implements ModelProvider {
 }
 ```
 
-### 5.5.2 真实 Provider
+### 5.5.2 真实 Provider 与协议适配
 
 真实 Provider 负责处理：
 
@@ -1001,16 +1033,141 @@ export class MockProvider implements ModelProvider {
 7. 错误码归一化
 ```
 
-建议每个模型供应商单独实现：
+当前实现包括：
 
 ```text
-OpenAIProvider
-ClaudeProvider
-GeminiProvider
-LocalProvider
+OpenAIProvider              -> OpenAI Responses API
+ChatCompletionsProvider     -> DeepSeek 等 OpenAI-compatible Chat Completions API
+MockProvider                -> 本地测试与示例
+createModelProvider         -> 根据配置创建单 Provider 或 ProviderRouter
 ```
 
 不要把不同厂商的协议细节写入 `runtime/`。
+
+### 5.5.3 Provider Router 与熔断器
+
+`ProviderRouter` 自身实现 `ModelProvider`，因此可以透明传给 `Engine`。当 `model.selection.enabled` 开启时，工厂会按 `model.provider` + `fallbackChain` 构造候选列表：
+
+```text
+Engine
+  -> ProviderRouter
+  -> primary provider
+  -> fallback provider
+  -> ModelChatOutput
+```
+
+熔断器状态：
+
+```text
+closed     -> 正常调用
+open       -> 失败达到阈值，暂时跳过
+half-open  -> resetTimeoutMs 后允许一次恢复探测
+```
+
+路由器只处理模型供应商故障隔离，不吞掉最终错误；所有候选 Provider 都失败时抛出 `MODEL_ROUTER_EXHAUSTED`，并标记 `retryable: true`。
+
+### 5.5.4 输出治理层
+
+`ModelOutputGovernance` 在 `Engine` 收到 assistant 消息后执行，目标是让模型输出在工具执行前被结构化检查：
+
+```text
+assistant message
+  -> 基础格式检查
+  -> 工具存在性检查
+  -> 参数 schema 校验
+  -> 注入模式检测
+  -> 输出治理报告
+  -> 可执行 toolCalls / 纠正观察消息
+```
+
+治理结果：
+
+```ts
+export interface OutputGovernanceReport {
+  passed: boolean;
+  acceptedToolCalls: ToolCall[];
+  rejectedToolCalls: RejectedToolCall[];
+}
+```
+
+拒绝原因使用稳定 code：
+
+```text
+INVALID_TOOL_CALL
+UNKNOWN_TOOL
+INVALID_ARGUMENTS
+INJECTION_DETECTED
+```
+
+治理模式：
+
+| 模式 | 行为 |
+|---|---|
+| `throw` | 直接发出 `output_governance` + `runtime_error` 并终止 |
+| `observe` | 把拒绝项转换成 `role: "tool"` 观察消息，让模型下一轮自修正 |
+| `self_correct` | 预留模式，后续可接入专门自修正循环 |
+
+注意：治理层不替代 `ToolExecutor` 的权限检查。权限、安全策略和实际执行保护仍是工具执行流水线的最后防线。
+
+### 5.5.5 工具幻觉检测
+
+`hallucination.ts` 先提供工具名纠错建议：
+
+```text
+模型输出 ech(...)
+  -> 注册表中不存在 ech
+  -> 和 echo 编辑距离相近
+  -> Suggestion: Use 'echo' instead of 'ech'.
+```
+
+该能力用于 `UNKNOWN_TOOL` 的纠正信息。后续可以继续扩展参数范围幻觉和事实检查器。
+
+### 5.5.6 Reasoning Budget
+
+`ReasoningBudgetManager` 提供 provider-neutral 的 reasoning 策略决策，不把 Claude、OpenAI 或其他供应商的私有参数硬编码进 runtime：
+
+```ts
+export interface ReasoningOptions {
+  strategy: 'disabled' | 'adaptive' | 'budget_based' | 'required';
+  effort?: 'low' | 'medium' | 'high' | 'max';
+}
+```
+
+当前策略：
+
+- `disabled`：不启用 reasoning。
+- `adaptive`：把启用决策交给支持该能力的 Provider。
+- `budget_based`：按任务复杂度和会话级 reasoning token 上限决定是否启用。
+- `required`：关键任务强制启用高 effort。
+
+`TokenUsage` 已预留 `reasoningTokens` 和 `cachedInputTokens`，便于后续接入模型原生 usage 明细。
+
+### 5.5.7 PGE 独立评估
+
+`orchestration/evaluator.ts` 提供 PGE 中 Evaluator 输出的标准化解析：
+
+```text
+Planner  -> 生成计划和验收标准
+Generator -> 执行任务并产出结果
+Evaluator -> 使用独立上下文评估结果
+```
+
+当前实现不直接调用模型，只解析 evaluator 结果：
+
+```text
+PASS
+confidence: high
+```
+
+或：
+
+```text
+FAIL
+- missing risk discussion
+confidence: medium
+```
+
+这样先稳定评估结果协议，后续可由 `Coordinator` 的 role handler 接入独立 `ModelProvider`。
 
 ---
 
@@ -1257,6 +1414,16 @@ runtime:
 
 model:
   provider: deepseek
+  selection:
+    enabled: false
+    failureThreshold: 3
+    resetTimeoutMs: 60000
+    fallbackChain: []
+  reasoning:
+    strategy: disabled
+    complexityThreshold: medium
+    maxReasoningTokensPerSession: 100000
+    maxReasoningCostPerSession: 0
   openai:
     model: gpt-5.5
     apiKeyEnv: OPENAI_API_KEY
@@ -1267,6 +1434,18 @@ model:
     baseUrl: https://api.deepseek.com
   temperature: 0.2
   maxTokens: 4096
+
+outputGovernance:
+  enabled: true
+  mode: observe
+  maxCorrectionTurns: 1
+  allowUnknownTools: false
+  strictAdditionalProperties: true
+  injectionPatterns:
+    - "rm -rf"
+    - "DROP TABLE"
+    - "<script"
+    - "${jndi:"
 
 memory:
   type: local
@@ -1347,6 +1526,20 @@ reliability:
 | `budget` | 单次任务模型调用次数、估算 token、上下文字符数限制 |
 | `drift` | 重复工具调用和工具调用总数保护 |
 
+模型治理相关配置说明：
+
+| 字段 | 说明 |
+|---|---|
+| `model.selection.enabled` | 是否启用 Provider Router；默认关闭以保持单 Provider 行为 |
+| `model.selection.fallbackChain` | 主 Provider 失败后的候选 Provider 顺序 |
+| `model.selection.failureThreshold` | Provider 连续失败达到该值后打开熔断器 |
+| `model.selection.resetTimeoutMs` | 熔断器从 open 进入 half-open 的等待时间 |
+| `model.reasoning.strategy` | reasoning 策略：`disabled`、`adaptive`、`budget_based`、`required` |
+| `model.reasoning.maxReasoningTokensPerSession` | 会话级 reasoning token 上限 |
+| `outputGovernance.enabled` | 是否启用模型输出治理 |
+| `outputGovernance.mode` | 治理失败处理模式：`throw`、`observe`、`self_correct` |
+| `outputGovernance.injectionPatterns` | 递归扫描工具参数时使用的危险模式列表 |
+
 ---
 
 ## 7. 最小可运行示例
@@ -1386,6 +1579,7 @@ reliability:
 ```ts
 import { Engine } from './runtime/engine';
 import { createMemory } from './memory/factory';
+import { ModelOutputGovernance } from './models/output-governance';
 import { createModelProvider } from './models/provider-factory';
 import { DefaultToolRegistry } from './tools/registry';
 import { loadHarnessConfig } from './utils/config';
@@ -1406,6 +1600,7 @@ async function main() {
     modelRetry: config.runtime.modelRetry,
     budget: config.runtime.budget,
     drift: config.runtime.drift,
+    outputGovernance: new ModelOutputGovernance(tools, config.outputGovernance),
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');
@@ -1518,8 +1713,16 @@ reliability/logger.ts
 
 ```text
 models/openai-provider.ts
+models/chat-completions-provider.ts
+models/provider-factory.ts
+models/provider-router.ts
+models/circuit-breaker.ts
 models/parser.ts
+models/chat-completions-parser.ts
 models/quality-gate.ts
+models/output-governance.ts
+models/hallucination.ts
+models/reasoning-budget.ts
 memory/context-builder.ts
 memory/summarizer.ts
 ```
@@ -1532,6 +1735,9 @@ memory/summarizer.ts
 3. 支持最近 N 轮上下文。
 4. 支持上下文长度控制。
 5. 模型异常不会导致进程崩溃。
+6. 模型输出进入工具执行前经过治理层校验。
+7. 未知工具和非法参数可以被拒绝或转成自修正观察消息。
+8. Provider Router 支持配置化 fallback 和熔断。
 ```
 
 ---

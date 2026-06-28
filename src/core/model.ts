@@ -18,18 +18,27 @@ export interface ModelChatInput {
 export interface ModelChatOutput {
   message: Message;
   usage?: TokenUsage;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ModelOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoning?: ReasoningOptions;
+}
+
+export interface ReasoningOptions {
+  strategy: 'disabled' | 'adaptive' | 'budget_based' | 'required';
+  effort?: 'low' | 'medium' | 'high' | 'max';
 }
 
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
 }
 
 export interface ModelStreamEvent {

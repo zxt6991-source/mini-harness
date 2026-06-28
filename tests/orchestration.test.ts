@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Coordinator } from '../src/orchestration/coordinator';
+import { evaluateOutput } from '../src/orchestration/evaluator';
 import { TaskGraph } from '../src/orchestration/graph';
 import { SimplePlanner } from '../src/orchestration/planner';
 import { TaskStateMachine } from '../src/orchestration/state-machine';
@@ -209,5 +210,33 @@ describe('Coordinator', () => {
       { id: 'plan', status: 'failed', error: 'cannot plan' },
       { id: 'build', status: 'skipped' },
     ]);
+  });
+});
+
+describe('Evaluator', () => {
+  it('parses conservative evaluator pass results', () => {
+    const result = evaluateOutput({
+      criteria: ['must mention risk', 'must include next step'],
+      output: 'This mentions risk and includes next step.',
+      evaluationText: 'PASS\nconfidence: high',
+    });
+
+    expect(result).toEqual({
+      passed: true,
+      confidence: 'high',
+      issues: [],
+    });
+  });
+
+  it('fails when evaluator lists issues', () => {
+    const result = evaluateOutput({
+      criteria: ['must mention risk'],
+      output: 'done',
+      evaluationText: 'FAIL\n- missing risk discussion\nconfidence: medium',
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.confidence).toBe('medium');
+    expect(result.issues).toEqual(['missing risk discussion']);
   });
 });

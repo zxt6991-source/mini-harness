@@ -1,5 +1,6 @@
 // 该文件是本地运行 MiniHarness 的示例入口，负责加载配置并启动一次引擎调用。
 import { createMemory } from './memory/factory';
+import { ModelOutputGovernance } from './models/output-governance';
 import { createModelProvider } from './models/provider-factory';
 import { Engine } from './runtime/engine';
 import { DefaultToolRegistry } from './tools/registry';
@@ -22,6 +23,7 @@ async function main() {
     modelRetry: config.runtime.modelRetry,
     budget: config.runtime.budget,
     drift: config.runtime.drift,
+    outputGovernance: new ModelOutputGovernance(tools, config.outputGovernance),
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');

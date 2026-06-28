@@ -6,7 +6,22 @@ import { ChatCompletionsProvider } from '../src/models/chat-completions-provider
 import { MockProvider } from '../src/models/mock-provider';
 import { OpenAIProvider } from '../src/models/openai-provider';
 import { createModelProvider } from '../src/models/provider-factory';
+import { ProviderRouter } from '../src/models/provider-router';
 import { loadEnvFile, loadHarnessConfig } from '../src/utils/config';
+
+const defaultSelection = {
+  enabled: false,
+  failureThreshold: 3,
+  resetTimeoutMs: 60000,
+  fallbackChain: [],
+};
+
+const defaultReasoning = {
+  strategy: 'disabled' as const,
+  complexityThreshold: 'medium' as const,
+  maxReasoningTokensPerSession: 100000,
+  maxReasoningCostPerSession: 0,
+};
 
 describe('provider factory', () => {
   it('loads harness config defaults and creates mock providers', async () => {
@@ -76,6 +91,8 @@ model:
         provider: 'deepseek',
         temperature: 0.2,
         maxTokens: 64,
+        selection: defaultSelection,
+        reasoning: defaultReasoning,
         openai: {
           model: 'gpt-test',
           apiKeyEnv: 'OPENAI_API_KEY',
@@ -124,6 +141,8 @@ model:
         provider: 'openai',
         temperature: 0.2,
         maxTokens: 64,
+        selection: defaultSelection,
+        reasoning: defaultReasoning,
         openai: {
           model: 'gpt-test',
           apiKeyEnv: 'OPENAI_API_KEY',
@@ -138,6 +157,94 @@ model:
     });
 
     expect(provider).toBeInstanceOf(OpenAIProvider);
+  });
+
+  it('loads model selection and output governance defaults', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'miniharness-governance-config-'));
+    const configPath = join(dir, 'harness.yaml');
+    await writeFile(
+      configPath,
+      `
+runtime:
+  maxSteps: 4
+  requestTimeoutMs: 1000
+model:
+  provider: mock
+outputGovernance:
+  enabled: true
+  mode: observe
+`,
+    );
+
+    const config = await loadHarnessConfig(configPath);
+
+    expect(config.outputGovernance).toMatchObject({
+      enabled: true,
+      mode: 'observe',
+      maxCorrectionTurns: 1,
+    });
+    expect(config.model.selection).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it('creates provider routers when model selection is enabled', () => {
+    const provider = createModelProvider({
+      runtime: {
+        maxSteps: 4,
+        requestTimeoutMs: 1000,
+        toolTimeoutMs: 30000,
+        enableStream: false,
+        maxConcurrentTools: 1,
+        toolErrorMode: 'throw',
+        modelRetry: {
+          maxRetries: 0,
+          initialBackoffMs: 250,
+          maxBackoffMs: 2000,
+        },
+        budget: {
+          maxModelCalls: 20,
+          maxEstimatedTokens: 1000000,
+          maxContextCharacters: 120000,
+          reserveOutputTokens: 4000,
+        },
+        drift: {
+          maxToolCalls: 50,
+          repeatedToolWindow: 6,
+          repeatedToolThreshold: 1000000,
+          reflectionInterval: 0,
+        },
+      },
+      model: {
+        provider: 'mock',
+        temperature: 0.2,
+        maxTokens: 64,
+        selection: {
+          enabled: true,
+          failureThreshold: 1,
+          resetTimeoutMs: 1000,
+          fallbackChain: ['deepseek'],
+        },
+        reasoning: {
+          strategy: 'disabled',
+          complexityThreshold: 'medium',
+          maxReasoningTokensPerSession: 100000,
+          maxReasoningCostPerSession: 0,
+        },
+        openai: {
+          model: 'gpt-test',
+          apiKeyEnv: 'OPENAI_API_KEY',
+          baseUrl: 'https://api.openai.com/v1',
+        },
+        deepseek: {
+          model: 'deepseek-test',
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          baseUrl: 'https://api.deepseek.com',
+        },
+      },
+    });
+
+    expect(provider).toBeInstanceOf(ProviderRouter);
   });
 
   it('loads environment variables from .env files without overriding existing values', async () => {

@@ -92,6 +92,42 @@ const modelConfigSchema = z
     provider: z.enum(['mock', 'openai', 'deepseek']).default('mock'),
     temperature: z.number().optional(),
     maxTokens: z.number().int().positive().optional(),
+    selection: z
+      .object({
+        enabled: z.boolean().default(false),
+        failureThreshold: z.number().int().positive().default(3),
+        resetTimeoutMs: z.number().int().positive().default(60_000),
+        fallbackChain: z
+          .array(z.enum(['mock', 'openai', 'deepseek']))
+          .default([]),
+      })
+      .default({
+        enabled: false,
+        failureThreshold: 3,
+        resetTimeoutMs: 60_000,
+        fallbackChain: [],
+      }),
+    reasoning: z
+      .object({
+        strategy: z
+          .enum(['disabled', 'adaptive', 'budget_based', 'required'])
+          .default('disabled'),
+        complexityThreshold: z
+          .enum(['easy', 'medium', 'hard', 'very_hard'])
+          .default('medium'),
+        maxReasoningTokensPerSession: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(100_000),
+        maxReasoningCostPerSession: z.number().nonnegative().default(0),
+      })
+      .default({
+        strategy: 'disabled',
+        complexityThreshold: 'medium',
+        maxReasoningTokensPerSession: 100_000,
+        maxReasoningCostPerSession: 0,
+      }),
     openai: providerConfigSchema.default({
       model: 'gpt-5.5',
       apiKeyEnv: 'OPENAI_API_KEY',
@@ -105,6 +141,18 @@ const modelConfigSchema = z
   })
   .default({
     provider: 'mock',
+    selection: {
+      enabled: false,
+      failureThreshold: 3,
+      resetTimeoutMs: 60_000,
+      fallbackChain: [],
+    },
+    reasoning: {
+      strategy: 'disabled',
+      complexityThreshold: 'medium',
+      maxReasoningTokensPerSession: 100_000,
+      maxReasoningCostPerSession: 0,
+    },
     openai: {
       model: 'gpt-5.5',
       apiKeyEnv: 'OPENAI_API_KEY',
@@ -115,6 +163,26 @@ const modelConfigSchema = z
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       baseUrl: 'https://api.deepseek.com',
     },
+  });
+
+const outputGovernanceConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    mode: z.enum(['throw', 'observe', 'self_correct']).default('observe'),
+    maxCorrectionTurns: z.number().int().nonnegative().default(1),
+    allowUnknownTools: z.boolean().default(false),
+    strictAdditionalProperties: z.boolean().default(true),
+    injectionPatterns: z
+      .array(z.string())
+      .default(['rm -rf', 'DROP TABLE', '<script', '${jndi:']),
+  })
+  .default({
+    enabled: true,
+    mode: 'observe',
+    maxCorrectionTurns: 1,
+    allowUnknownTools: false,
+    strictAdditionalProperties: true,
+    injectionPatterns: ['rm -rf', 'DROP TABLE', '<script', '${jndi:'],
   });
 
 const memorySummaryConfigSchema = z
@@ -279,6 +347,7 @@ const harnessConfigSchema = z
     runtime: runtimeConfigSchema,
     model: modelConfigSchema,
     memory: memoryConfigSchema,
+    outputGovernance: outputGovernanceConfigSchema,
   })
   .passthrough();
 

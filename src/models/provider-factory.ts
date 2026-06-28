@@ -4,12 +4,37 @@ import type { HarnessConfig } from '../utils/config';
 import { ChatCompletionsProvider } from './chat-completions-provider';
 import { MockProvider } from './mock-provider';
 import { OpenAIProvider } from './openai-provider';
+import { ProviderRouter } from './provider-router';
+
+type ProviderName = HarnessConfig['model']['provider'];
 
 /** 根据配置中的 provider 字段创建对应的模型提供方实例。 */
 export function createModelProvider(
   config: Pick<HarnessConfig, 'model' | 'runtime'>,
 ): ModelProvider {
-  switch (config.model.provider) {
+  if (config.model.selection?.enabled) {
+    const providers = [
+      createSingleProvider(config, config.model.provider),
+      ...config.model.selection.fallbackChain.map((provider) =>
+        createSingleProvider(config, provider),
+      ),
+    ];
+
+    return new ProviderRouter({
+      providers,
+      failureThreshold: config.model.selection.failureThreshold,
+      resetTimeoutMs: config.model.selection.resetTimeoutMs,
+    });
+  }
+
+  return createSingleProvider(config, config.model.provider);
+}
+
+function createSingleProvider(
+  config: Pick<HarnessConfig, 'model' | 'runtime'>,
+  provider: ProviderName,
+): ModelProvider {
+  switch (provider) {
     case 'mock':
       return new MockProvider();
     case 'openai':

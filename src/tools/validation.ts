@@ -113,6 +113,61 @@ function validateField(
     });
   }
 
+  if (typeof value === 'number') {
+    if (typeof schema.minimum === 'number' && value < schema.minimum) {
+      issues.push({
+        path,
+        message: `must be >= ${schema.minimum}`,
+      });
+    }
+
+    if (typeof schema.maximum === 'number' && value > schema.maximum) {
+      issues.push({
+        path,
+        message: `must be <= ${schema.maximum}`,
+      });
+    }
+  }
+
+  if (typeof value === 'string') {
+    if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
+      issues.push({
+        path,
+        message: `length must be >= ${schema.minLength}`,
+      });
+    }
+
+    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
+      issues.push({
+        path,
+        message: `length must be <= ${schema.maxLength}`,
+      });
+    }
+
+    if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern).test(value)) {
+      issues.push({
+        path,
+        message: `must match pattern ${schema.pattern}`,
+      });
+    }
+  }
+
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      issues.push({
+        path,
+        message: `must have at least ${schema.minItems} items`,
+      });
+    }
+
+    if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) {
+      issues.push({
+        path,
+        message: `must have at most ${schema.maxItems} items`,
+      });
+    }
+  }
+
   return issues;
 }
 

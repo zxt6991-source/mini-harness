@@ -9,6 +9,10 @@ import type {
   ToolRegistry,
 } from '../core';
 import { MaxStepsExceededError } from '../core';
+import {
+  createGovernanceObservation,
+  type ModelOutputGovernance,
+} from '../models/output-governance';
 import { createId } from '../utils/id';
 import { BudgetManager, type RuntimeBudget } from './budget';
 import { DriftGuard, type DriftGuardOptions } from './drift';
@@ -39,6 +43,7 @@ export interface EngineOptions {
   modelRetry?: RetryPolicyOptions;
   budget?: Partial<RuntimeBudget>;
   drift?: DriftGuardOptions;
+  outputGovernance?: ModelOutputGovernance;
 }
 
 export interface EngineRunOptions {
@@ -257,6 +262,8 @@ export class Engine {
       recordTokenUsage(state, output.usage);
 
       const assistantMessage = output.message;
+      const originalToolCalls = assistantMessage.toolCalls ?? [];
+      let executableToolCalls = originalToolCalls;
 
       yield createEngineEvent({
         type: 'model_message',
@@ -283,7 +290,43 @@ export class Engine {
         throw error;
       }
 
-      if (!assistantMessage.toolCalls || assistantMessage.toolCalls.length === 0) {
+      const governanceReport =
+        this.options.outputGovernance?.validateAssistantMessage(assistantMessage);
+
+      if (governanceReport) {
+        yield createEngineEvent({
+          type: 'output_governance',
+          sessionId,
+          traceId: state.traceId,
+          passed: governanceReport.passed,
+          acceptedToolCallCount: governanceReport.acceptedToolCalls.length,
+          rejectedToolCallCount: governanceReport.rejectedToolCalls.length,
+          snapshot: snapshotRunState(state),
+          metadata: {
+            rejectedToolCalls: governanceReport.rejectedToolCalls,
+          },
+        });
+
+        executableToolCalls = governanceReport.acceptedToolCalls;
+
+        if (!governanceReport.passed && this.options.outputGovernance?.mode === 'throw') {
+          const first = governanceReport.rejectedToolCalls[0];
+          state.terminationReason = 'error';
+          yield createEngineEvent({
+            type: 'runtime_error',
+            sessionId,
+            traceId: state.traceId,
+            phase: 'output_governance',
+            errorCode: first?.code,
+            retryable: false,
+            message: first?.message ?? 'Model output governance failed',
+            snapshot: snapshotRunState(state),
+          });
+          throw new Error(first?.message ?? 'Model output governance failed');
+        }
+      }
+
+      if (originalToolCalls.length === 0) {
         await this.memory.save(sessionId, assistantMessage);
         state.messages.push(assistantMessage);
         state.terminationReason = 'no_tool_calls';
@@ -313,6 +356,42 @@ export class Engine {
       await this.memory.save(sessionId, assistantMessage);
       state.messages.push(assistantMessage);
 
+      if (
+        governanceReport &&
+        !governanceReport.passed &&
+        this.options.outputGovernance?.mode === 'observe'
+      ) {
+        for (const rejection of governanceReport.rejectedToolCalls) {
+          const correctionMessage = createGovernanceObservation(rejection);
+          messages.push(correctionMessage);
+          await this.memory.save(sessionId, correctionMessage);
+          state.messages.push(correctionMessage);
+
+          yield createEngineEvent({
+            type: 'model_correction',
+            sessionId,
+            traceId: state.traceId,
+            toolCallId: rejection.toolCallId,
+            toolName: rejection.toolName,
+            message: correctionMessage.content,
+            snapshot: snapshotRunState(state),
+          });
+        }
+
+        if (executableToolCalls.length === 0) {
+          state.step = step + 1;
+          yield createEngineEvent({
+            type: 'turn_end',
+            sessionId,
+            traceId: state.traceId,
+            step,
+            toolCallCount: 0,
+            snapshot: snapshotRunState(state),
+          });
+          continue;
+        }
+      }
+
       if (runOptions.abortSignal?.aborted) {
         state.terminationReason = 'aborted';
         const error = new RuntimeAbortedError();
@@ -329,7 +408,7 @@ export class Engine {
         throw error;
       }
 
-      for (const toolCall of assistantMessage.toolCalls) {
+      for (const toolCall of executableToolCalls) {
         yield createEngineEvent({
           type: 'tool_start',
           sessionId,
@@ -347,7 +426,7 @@ export class Engine {
           toolErrorMode: this.options.toolErrorMode,
           toolTimeoutMs: this.options.toolTimeoutMs,
         });
-        toolResults = await scheduler.executeAll(assistantMessage.toolCalls, {
+        toolResults = await scheduler.executeAll(executableToolCalls, {
           traceId: assistantMessage.id,
           sessionId,
           abortSignal: runOptions.abortSignal,
@@ -388,7 +467,7 @@ export class Engine {
       }
 
       try {
-        driftGuard.recordToolCalls(assistantMessage.toolCalls);
+        driftGuard.recordToolCalls(executableToolCalls);
       } catch (error) {
         state.terminationReason = 'drift_detected';
         yield createEngineEvent({
@@ -410,7 +489,7 @@ export class Engine {
         sessionId,
         traceId: state.traceId,
         step,
-        toolCallCount: assistantMessage.toolCalls.length,
+        toolCallCount: executableToolCalls.length,
         snapshot: snapshotRunState(state),
       });
     }

@@ -8,6 +8,8 @@ export type EngineEventType =
   | 'model_start'
   | 'model_delta'
   | 'model_message'
+  | 'output_governance'
+  | 'model_correction'
   | 'tool_start'
   | 'tool_result'
   | 'turn_end'
@@ -48,6 +50,20 @@ export interface ModelMessageEvent extends BaseEngineEvent {
   type: 'model_message';
   message: Message;
   usage?: TokenUsage;
+}
+
+export interface OutputGovernanceEvent extends BaseEngineEvent {
+  type: 'output_governance';
+  passed: boolean;
+  acceptedToolCallCount: number;
+  rejectedToolCallCount: number;
+}
+
+export interface ModelCorrectionEvent extends BaseEngineEvent {
+  type: 'model_correction';
+  toolCallId: string;
+  toolName: string;
+  message: string;
 }
 
 export interface ToolStartEvent extends BaseEngineEvent {
@@ -91,6 +107,8 @@ export type EngineEvent =
   | ModelStartEvent
   | ModelDeltaEvent
   | ModelMessageEvent
+  | OutputGovernanceEvent
+  | ModelCorrectionEvent
   | ToolStartEvent
   | ToolResultEvent
   | TurnEndEvent
