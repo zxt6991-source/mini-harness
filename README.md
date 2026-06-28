@@ -117,6 +117,18 @@ export DEEPSEEK_API_KEY=sk-<redacted>
 pnpm dev
 ```
 
+Alternatively, put the key in a local `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+```env
+DEEPSEEK_API_KEY=sk-<redacted>
+```
+
+`loadHarnessConfig()` reads `.env` automatically before creating the configured provider. Values already set in the shell take precedence over `.env` values.
+
 The default configuration still uses `provider: mock`, so local development and tests do not require a real model API key.
 
 ## MCP Integration
