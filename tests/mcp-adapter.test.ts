@@ -134,4 +134,41 @@ describe('McpToolAdapter', () => {
       internalToolName: 'mcp_local_tools_echo',
     });
   });
+
+  it('sanitizes unsafe and long MCP tool names while preserving remote calls', async () => {
+    const originalToolName = `workspace/search files:${'x'.repeat(80)}`;
+    const client: McpClient = {
+      serverName: 'unsafe server',
+      listTools: vi.fn(),
+      callTool: vi.fn(async () => ({
+        content: [{ type: 'text', text: 'found' }],
+        isError: false,
+      })),
+    };
+    const adapter = new McpToolAdapter(
+      {
+        name: originalToolName,
+        description: 'Search files',
+        inputSchema: { type: 'object' },
+      },
+      client,
+    );
+
+    expect(adapter.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(adapter.name).not.toBe(originalToolName);
+
+    const result = await adapter.call({ query: 'todo' }, ctx);
+
+    expect(client.callTool).toHaveBeenCalledWith({
+      name: originalToolName,
+      arguments: { query: 'todo' },
+      traceId: 'trace_1',
+    });
+    expect(result.metadata).toMatchObject({
+      mcpServerName: 'unsafe server',
+      mcpToolName: originalToolName,
+      mcpOriginalName: originalToolName,
+      internalToolName: adapter.name,
+    });
+  });
 });

@@ -12,6 +12,12 @@ export interface JsonRpcRequest {
   params?: Record<string, unknown>;
 }
 
+export interface JsonRpcNotification {
+  jsonrpc: '2.0';
+  method: string;
+  params?: Record<string, unknown>;
+}
+
 export interface JsonRpcErrorPayload {
   code: number;
   message: string;
@@ -23,6 +29,16 @@ export interface JsonRpcResponse<T = unknown> {
   id: JsonRpcId;
   result?: T;
   error?: JsonRpcErrorPayload;
+}
+
+export interface McpInitializeResult {
+  protocolVersion: string;
+  capabilities?: Record<string, unknown>;
+  serverInfo?: {
+    name: string;
+    version?: string;
+  } & Record<string, unknown>;
+  instructions?: string;
 }
 
 export interface McpTool {
@@ -37,6 +53,61 @@ export interface McpTool {
 export interface McpListToolsResult {
   tools: McpTool[];
   nextCursor?: string;
+}
+
+export interface McpResource {
+  uri: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+  annotations?: Record<string, unknown>;
+}
+
+export interface McpListResourcesResult {
+  resources: McpResource[];
+  nextCursor?: string;
+}
+
+export type McpResourceContent =
+  | {
+      uri: string;
+      mimeType?: string;
+      text?: string;
+      blob?: string;
+      annotations?: Record<string, unknown>;
+    }
+  | Record<string, unknown>;
+
+export interface McpReadResourceResult {
+  contents: McpResourceContent[];
+}
+
+export interface McpPrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: Array<Record<string, unknown>>;
+}
+
+export interface McpListPromptsResult {
+  prompts: McpPrompt[];
+  nextCursor?: string;
+}
+
+export interface McpGetPromptInput {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+export interface McpPromptMessage {
+  role: string;
+  content: unknown;
+}
+
+export interface McpGetPromptResult {
+  description?: string;
+  messages: McpPromptMessage[];
 }
 
 export type McpContent =
@@ -110,6 +181,18 @@ export function createJsonRpcRequest(
   return {
     jsonrpc: '2.0',
     id,
+    method,
+    ...(params ? { params } : {}),
+  };
+}
+
+/** 构造标准 JSON-RPC 2.0 notification，不携带 id 且不要求服务端响应。 */
+export function createJsonRpcNotification(
+  method: string,
+  params?: Record<string, unknown>,
+): JsonRpcNotification {
+  return {
+    jsonrpc: '2.0',
     method,
     ...(params ? { params } : {}),
   };

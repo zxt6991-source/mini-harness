@@ -99,10 +99,15 @@ mcp:
   enable: false
   protocolVersion: 2025-06-18
   requestTimeoutMs: 30000
+  discoveryCacheTtlMs: 300000
+  clientInfo:
+    name: MiniHarness
+    version: 0.1.0
   servers:
     - name: local-tools
-      transport: http
+      transport: streamable_http
       endpoint: http://127.0.0.1:3001/mcp
+      namePrefix: mcp_local_tools
 
 orchestration:
   enabled: true

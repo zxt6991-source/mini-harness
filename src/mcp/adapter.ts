@@ -1,4 +1,5 @@
 // 该文件将 MCP 工具适配为 MiniHarness 内部 Tool 接口，并把 MCP 内容转换为文本结果。
+import { createHash } from 'node:crypto';
 import type { Tool, ToolCapability, ToolContext, ToolResult } from '../core';
 import type { McpClient } from './client';
 import type { McpCallToolResult, McpContent, McpTool } from './protocol';
@@ -57,6 +58,7 @@ function resultToToolResult(
     metadata: {
       mcpServerName: serverName,
       mcpToolName: toolName,
+      mcpOriginalName: toolName,
       ...(internalToolName && internalToolName !== toolName
         ? { internalToolName }
         : {}),
@@ -80,9 +82,7 @@ export class McpToolAdapter implements Tool {
     private readonly client: McpClient,
     options: McpToolAdapterOptions = {},
   ) {
-    this.name = options.namePrefix
-      ? `${sanitizeToolName(options.namePrefix)}_${sanitizeToolName(tool.name)}`
-      : tool.name;
+    this.name = buildInternalToolName(tool.name, options.namePrefix);
     this.description = tool.description ?? tool.title ?? tool.name;
     this.schema = tool.inputSchema;
     this.capability = {
@@ -121,4 +121,18 @@ export class McpToolAdapter implements Tool {
 function sanitizeToolName(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
   return sanitized || 'tool';
+}
+
+/** 生成内部工具名，确保符合 DefaultToolRegistry 的 64 字符名称限制。 */
+function buildInternalToolName(toolName: string, namePrefix?: string): string {
+  const rawName = namePrefix ? `${namePrefix}_${toolName}` : toolName;
+  const sanitized = sanitizeToolName(rawName);
+
+  if (sanitized.length <= 64) {
+    return sanitized;
+  }
+
+  const hash = createHash('sha256').update(sanitized).digest('hex').slice(0, 8);
+  const prefix = sanitizeToolName(sanitized.slice(0, 55)).replace(/[_-]+$/g, '');
+  return `${prefix || 'tool'}_${hash}`.slice(0, 64);
 }

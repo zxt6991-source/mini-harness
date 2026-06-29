@@ -93,7 +93,7 @@ Not implemented yet:
 
 - SQLite memory persistence
 - Vector memory index
-- MCP stdio transport, SSE streaming, initialization/session lifecycle
+- MCP stdio transport and persistent schema cache
 - Persistent orchestration state
 - Real multi-process or networked agent workers
 - File, HTTP, and Shell tools
@@ -168,7 +168,7 @@ memory:
 
 ## MCP Integration
 
-`HttpMcpClient` supports MCP tool discovery and tool calls over a Streamable HTTP-style endpoint. Tests use a mock `fetchFn`, so the normal test suite does not require a live MCP server.
+`HttpMcpClient` supports MCP initialization/session lifecycle, JSON and `text/event-stream` Streamable HTTP responses, tool discovery, tool calls, and resource/prompt client methods. Tests use a mock `fetchFn`, so the normal test suite does not require a live MCP server.
 
 ```ts
 import { DefaultToolRegistry, HttpMcpClient, discoverMcpTools } from './src';
@@ -184,7 +184,7 @@ for (const tool of await discoverMcpTools(client)) {
 }
 ```
 
-The runtime still only sees `Tool` objects; MCP protocol details stay inside `src/mcp/`.
+`discoverMcpTools()` initializes clients that expose `initialize()`, caches tool discovery results for a short TTL, and wraps remote MCP tools as safe internal `Tool` names while preserving the original MCP tool name for `tools/call`. The runtime still only sees `Tool` objects; MCP protocol details stay inside `src/mcp/`.
 
 ## Runtime Events and Recovery
 
