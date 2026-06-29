@@ -105,10 +105,25 @@ mcp:
       endpoint: http://127.0.0.1:3001/mcp
 
 orchestration:
-  enable: true
+  enabled: true
   defaultRole: default
   maxRetries: 1
   continueOnFailure: true
+  maxConcurrentTasks: 1
+  defaultTaskTimeoutMs: 300000
+  retry:
+    initialBackoffMs: 250
+    maxBackoffMs: 5000
+  checkpoint:
+    enabled: true
+    store: memory
+    rootDir: .miniharness/orchestration/checkpoints
+  messages:
+    maxQueueSize: 1000
+    requireAckByDefault: false
+  scratchpad:
+    maxEntries: 1000
+    maxValueCharacters: 20000
 
 security:
   sandboxDir: ./workspace

@@ -70,6 +70,65 @@ export class TaskGraph {
     return this.topologicalSort();
   }
 
+  /** 返回按依赖层分组的可并行任务集合。 */
+  getParallelizableGroups(): Task[][] {
+    const ordered = this.topologicalSort();
+    const remaining = new Set(ordered.map((task) => task.id));
+    const completed = new Set<string>();
+    const groups: Task[][] = [];
+
+    while (remaining.size > 0) {
+      const ready = ordered.filter(
+        (task) =>
+          remaining.has(task.id) &&
+          task.dependsOn.every((dependencyId) => completed.has(dependencyId)),
+      );
+
+      if (ready.length === 0) {
+        throw new Error('Task graph contains a cycle');
+      }
+
+      groups.push(ready);
+      for (const task of ready) {
+        remaining.delete(task.id);
+        completed.add(task.id);
+      }
+    }
+
+    return groups;
+  }
+
+  /** 返回直接或间接依赖指定任务的所有后代任务，按拓扑顺序排列。 */
+  getBlockedDescendants(taskId: string): Task[] {
+    this.mustGetTask(taskId);
+    const blocked = new Set<string>();
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (const task of this.topologicalSort()) {
+        if (task.id === taskId || blocked.has(task.id)) {
+          continue;
+        }
+
+        if (
+          task.dependsOn.includes(taskId) ||
+          task.dependsOn.some((dependencyId) => blocked.has(dependencyId))
+        ) {
+          blocked.add(task.id);
+          changed = true;
+        }
+      }
+    }
+
+    return this.topologicalSort().filter((task) => blocked.has(task.id));
+  }
+
+  /** 返回直接或间接依赖指定任务的所有后代任务。 */
+  getDependents(taskId: string): Task[] {
+    return this.getBlockedDescendants(taskId);
+  }
+
   /** 用新的任务状态替换同 ID 任务，并返回新的不可变任务图实例。 */
   updateTask(task: Task): TaskGraph {
     const nextTasks = this.getTasks().map((current) =>

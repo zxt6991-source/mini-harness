@@ -37,11 +37,34 @@ export * from './models/chat-completions-provider';
 export * from './models/chat-completions-parser';
 export * from './models/provider-factory';
 export * from './orchestration/coordinator';
+export * from './orchestration/agent-context';
+export * from './orchestration/checkpoint';
+export * from './orchestration/engine';
+export * from './orchestration/events';
 export * from './orchestration/evaluator';
+export {
+  createTaskExecution,
+  normalizeTaskExecutionError,
+  normalizeTaskSpec,
+  toLegacyTask,
+} from './orchestration/execution';
+export type {
+  CreateTaskExecutionOptions,
+  TaskExecution,
+  TaskExecutionError,
+  TaskExecutionMetrics,
+  TaskExecutionStatus,
+  TaskSpec,
+  TaskType,
+} from './orchestration/execution';
+export * from './orchestration/message-bus';
 export * from './orchestration/graph';
 export * from './orchestration/planner';
+export * from './orchestration/scratchpad';
 export * from './orchestration/state-machine';
 export * from './orchestration/task';
+export * from './orchestration/workflow';
+export * from './orchestration/workflow-state-machine';
 export * from './tools/registry';
 export * from './tools/executor';
 export * from './tools/result';

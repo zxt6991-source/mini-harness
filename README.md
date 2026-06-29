@@ -75,6 +75,12 @@ Implemented:
 - TaskGraph
 - TaskStateMachine
 - Coordinator
+- OrchestrationEngine
+- WorkflowStateMachine
+- InMemoryCheckpointStore
+- OrchestrationMessageBus
+- Scratchpad
+- AgentExecutionContext
 - DefaultToolRegistry
 - Engine main loop
 - EchoTool
@@ -229,7 +235,7 @@ Tool calls from the same assistant message can run concurrently with `maxConcurr
 
 ## Orchestration
 
-The orchestration layer can split goals into tasks, validate task dependencies, run tasks in dependency order, retry failed tasks, downgrade blocked work to `skipped`, and dispatch work to role-specific handlers.
+The orchestration layer can split goals into tasks, validate task dependencies, run tasks in dependency order or bounded parallel groups, retry failed tasks, downgrade blocked descendants to `skipped`, and dispatch work to role-specific handlers. It also exposes workflow/task lifecycle events, an in-memory checkpoint store, a workflow state machine, a message bus, scratchpad state sharing, and isolated agent execution contexts.
 
 ```ts
 import { Coordinator, SimplePlanner } from './src';
@@ -246,6 +252,7 @@ const tasks = await planner.plan({
 const coordinator = new Coordinator({
   maxRetries: 1,
   continueOnFailure: true,
+  maxConcurrentTasks: 2,
   handlers: {
     planner: async (task) => ({ result: `${task.title} done` }),
     builder: async (task) => ({ result: `${task.title} done` }),
@@ -253,4 +260,66 @@ const coordinator = new Coordinator({
 });
 
 await coordinator.run(tasks);
+```
+
+For lifecycle observation, use `runEvents()`:
+
+```ts
+for await (const event of coordinator.runEvents(tasks, {
+  workflowRunId: 'workflow_1',
+})) {
+  console.log(event.type, event.taskId);
+}
+```
+
+Workflow-level orchestration composes a finite state machine with task execution:
+
+```ts
+import { OrchestrationEngine } from './src';
+
+const engine = new OrchestrationEngine({
+  workflow: {
+    id: 'ship_feature',
+    name: 'Ship feature',
+    version: '1.0.0',
+    initialState: 'start',
+    states: [
+      { id: 'start', type: 'initial' },
+      { id: 'build', type: 'normal', taskIds: ['build'] },
+      { id: 'complete', type: 'final' },
+    ],
+    transitions: [
+      { from: 'start', to: 'build' },
+      { from: 'build', to: 'complete' },
+    ],
+  },
+  handlers: {
+    default: async (task) => ({ result: `${task.title} done` }),
+  },
+});
+```
+
+Default orchestration config:
+
+```yaml
+orchestration:
+  enabled: true
+  defaultRole: default
+  maxRetries: 1
+  continueOnFailure: true
+  maxConcurrentTasks: 1
+  defaultTaskTimeoutMs: 300000
+  retry:
+    initialBackoffMs: 250
+    maxBackoffMs: 5000
+  checkpoint:
+    enabled: true
+    store: memory
+    rootDir: .miniharness/orchestration/checkpoints
+  messages:
+    maxQueueSize: 1000
+    requireAckByDefault: false
+  scratchpad:
+    maxEntries: 1000
+    maxValueCharacters: 20000
 ```

@@ -342,12 +342,113 @@ const memoryConfigSchema = z
     },
   });
 
+const orchestrationRetryConfigSchema = z
+  .object({
+    initialBackoffMs: z.number().int().nonnegative().default(250),
+    maxBackoffMs: z.number().int().nonnegative().default(5_000),
+  })
+  .default({
+    initialBackoffMs: 250,
+    maxBackoffMs: 5_000,
+  });
+
+const orchestrationCheckpointConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    store: z.enum(['memory', 'jsonl']).default('memory'),
+    rootDir: z
+      .string()
+      .default('.miniharness/orchestration/checkpoints'),
+  })
+  .default({
+    enabled: true,
+    store: 'memory',
+    rootDir: '.miniharness/orchestration/checkpoints',
+  });
+
+const orchestrationMessagesConfigSchema = z
+  .object({
+    maxQueueSize: z.number().int().positive().default(1_000),
+    requireAckByDefault: z.boolean().default(false),
+  })
+  .default({
+    maxQueueSize: 1_000,
+    requireAckByDefault: false,
+  });
+
+const orchestrationScratchpadConfigSchema = z
+  .object({
+    maxEntries: z.number().int().positive().default(1_000),
+    maxValueCharacters: z.number().int().positive().default(20_000),
+  })
+  .default({
+    maxEntries: 1_000,
+    maxValueCharacters: 20_000,
+  });
+
+const orchestrationConfigSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return value;
+    }
+
+    const record = value as Record<string, unknown>;
+    if (record.enabled === undefined && record.enable !== undefined) {
+      return {
+        ...record,
+        enabled: record.enable,
+      };
+    }
+
+    return value;
+  },
+  z
+    .object({
+      enabled: z.boolean().default(true),
+      defaultRole: z.string().default('default'),
+      maxRetries: z.number().int().nonnegative().default(1),
+      continueOnFailure: z.boolean().default(true),
+      maxConcurrentTasks: z.number().int().positive().default(1),
+      defaultTaskTimeoutMs: z.number().int().positive().default(300_000),
+      retry: orchestrationRetryConfigSchema,
+      checkpoint: orchestrationCheckpointConfigSchema,
+      messages: orchestrationMessagesConfigSchema,
+      scratchpad: orchestrationScratchpadConfigSchema,
+    })
+    .default({
+      enabled: true,
+      defaultRole: 'default',
+      maxRetries: 1,
+      continueOnFailure: true,
+      maxConcurrentTasks: 1,
+      defaultTaskTimeoutMs: 300_000,
+      retry: {
+        initialBackoffMs: 250,
+        maxBackoffMs: 5_000,
+      },
+      checkpoint: {
+        enabled: true,
+        store: 'memory',
+        rootDir: '.miniharness/orchestration/checkpoints',
+      },
+      messages: {
+        maxQueueSize: 1_000,
+        requireAckByDefault: false,
+      },
+      scratchpad: {
+        maxEntries: 1_000,
+        maxValueCharacters: 20_000,
+      },
+    }),
+);
+
 const harnessConfigSchema = z
   .object({
     runtime: runtimeConfigSchema,
     model: modelConfigSchema,
     memory: memoryConfigSchema,
     outputGovernance: outputGovernanceConfigSchema,
+    orchestration: orchestrationConfigSchema,
   })
   .passthrough();
 
