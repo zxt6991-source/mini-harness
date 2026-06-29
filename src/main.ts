@@ -2,6 +2,9 @@
 import { createMemory } from './memory/factory';
 import { ModelOutputGovernance } from './models/output-governance';
 import { createModelProvider } from './models/provider-factory';
+import { FeatureGateEvaluator } from './production/feature-gates';
+import { ProductionMetricsCollector } from './production/metrics';
+import { ToolSchemaCache } from './production/schema-cache';
 import { Engine } from './runtime/engine';
 import { DefaultToolRegistry } from './tools/registry';
 import { loadHarnessConfig } from './utils/config';
@@ -9,9 +12,18 @@ import { loadHarnessConfig } from './utils/config';
 /** 加载本地配置并启动一次默认会话，用于演示 MiniHarness 的基本运行流程。 */
 async function main() {
   const config = await loadHarnessConfig();
+  const featureGates = new FeatureGateEvaluator(config.production.featureGates);
   const model = createModelProvider(config);
   const memory = createMemory(config.memory);
-  const tools = new DefaultToolRegistry();
+  const schemaCache =
+    config.production.schemaCache.enabled && featureGates.isEnabled('schemaCache')
+      ? new ToolSchemaCache({ maxEntries: config.production.schemaCache.maxEntries })
+      : false;
+  const metrics =
+    config.production.metrics.enabled && featureGates.isEnabled('metrics')
+      ? new ProductionMetricsCollector()
+      : undefined;
+  const tools = new DefaultToolRegistry(undefined, { schemaCache });
 
   const engine = new Engine(model, memory, tools, {
     maxSteps: config.runtime.maxSteps,
@@ -24,6 +36,7 @@ async function main() {
     budget: config.runtime.budget,
     drift: config.runtime.drift,
     outputGovernance: new ModelOutputGovernance(tools, config.outputGovernance),
+    metrics,
   });
 
   const response = await engine.run('帮我分析一下当前项目结构', 'default-session');

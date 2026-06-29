@@ -185,6 +185,16 @@ const outputGovernanceConfigSchema = z
     injectionPatterns: ['rm -rf', 'DROP TABLE', '<script', '${jndi:'],
   });
 
+const featureGateRuleConfigSchema = z.union([
+  z.boolean(),
+  z.object({
+    enabled: z.boolean().optional(),
+    rolloutPercent: z.number().min(0).max(100).optional(),
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional(),
+  }),
+]);
+
 const memorySummaryConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -442,6 +452,70 @@ const orchestrationConfigSchema = z.preprocess(
     }),
 );
 
+const productionConfigSchema = z
+  .object({
+    environment: z
+      .enum(['development', 'test', 'staging', 'production'])
+      .default('development'),
+    featureGates: z
+      .record(z.string(), featureGateRuleConfigSchema)
+      .default({
+        schemaCache: true,
+        modularPrompt: true,
+        metrics: true,
+      }),
+    prompt: z
+      .object({
+        cacheBoundaryCharacters: z.number().int().positive().default(48_000),
+        exposeMetadata: z.boolean().default(true),
+      })
+      .default({
+        cacheBoundaryCharacters: 48_000,
+        exposeMetadata: true,
+      }),
+    schemaCache: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxEntries: z.number().int().positive().default(1_000),
+      })
+      .default({
+        enabled: true,
+        maxEntries: 1_000,
+      }),
+    metrics: z
+      .object({
+        enabled: z.boolean().default(true),
+        latencyWarningMs: z.number().int().positive().default(2_000),
+        errorRateWarningThreshold: z.number().min(0).max(1).default(0.01),
+      })
+      .default({
+        enabled: true,
+        latencyWarningMs: 2_000,
+        errorRateWarningThreshold: 0.01,
+      }),
+  })
+  .default({
+    environment: 'development',
+    featureGates: {
+      schemaCache: true,
+      modularPrompt: true,
+      metrics: true,
+    },
+    prompt: {
+      cacheBoundaryCharacters: 48_000,
+      exposeMetadata: true,
+    },
+    schemaCache: {
+      enabled: true,
+      maxEntries: 1_000,
+    },
+    metrics: {
+      enabled: true,
+      latencyWarningMs: 2_000,
+      errorRateWarningThreshold: 0.01,
+    },
+  });
+
 const harnessConfigSchema = z
   .object({
     runtime: runtimeConfigSchema,
@@ -449,6 +523,7 @@ const harnessConfigSchema = z
     memory: memoryConfigSchema,
     outputGovernance: outputGovernanceConfigSchema,
     orchestration: orchestrationConfigSchema,
+    production: productionConfigSchema,
   })
   .passthrough();
 
@@ -548,6 +623,81 @@ function parseEnvLine(line: string): [string, string] | undefined {
   return [key, unquoteEnvValue(assignment.slice(equalsIndex + 1))];
 }
 
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (/^(true|yes|1|on)$/i.test(value)) {
+    return true;
+  }
+
+  if (/^(false|no|0|off)$/i.test(value)) {
+    return false;
+  }
+
+  return undefined;
+}
+
+function envFeatureNameToKey(name: string): string {
+  return name
+    .toLowerCase()
+    .split('_')
+    .map((part, index) =>
+      index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`,
+    )
+    .join('');
+}
+
+function applyProductionEnvOverrides(config: HarnessConfig): HarnessConfig {
+  const production = {
+    ...config.production,
+    featureGates: { ...config.production.featureGates },
+    prompt: { ...config.production.prompt },
+    schemaCache: { ...config.production.schemaCache },
+    metrics: { ...config.production.metrics },
+  };
+
+  const environment = process.env.HARNESS_ENVIRONMENT;
+  if (
+    environment === 'development' ||
+    environment === 'test' ||
+    environment === 'staging' ||
+    environment === 'production'
+  ) {
+    production.environment = environment;
+  }
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith('HARNESS_FEATURE_')) {
+      continue;
+    }
+
+    const parsed = parseBooleanEnv(value);
+    if (parsed === undefined) {
+      continue;
+    }
+
+    production.featureGates[envFeatureNameToKey(key.slice('HARNESS_FEATURE_'.length))] =
+      parsed;
+  }
+
+  const metricsEnabled = parseBooleanEnv(process.env.HARNESS_METRICS_ENABLED);
+  if (metricsEnabled !== undefined) {
+    production.metrics.enabled = metricsEnabled;
+  }
+
+  const schemaCacheEnabled = parseBooleanEnv(process.env.HARNESS_SCHEMA_CACHE_ENABLED);
+  if (schemaCacheEnabled !== undefined) {
+    production.schemaCache.enabled = schemaCacheEnabled;
+  }
+
+  return {
+    ...config,
+    production,
+  };
+}
+
 /** 加载 .env 文件，将尚未存在于 process.env 的变量写入当前进程环境。 */
 export async function loadEnvFile(path = '.env'): Promise<boolean> {
   let raw: string;
@@ -589,5 +739,5 @@ export async function loadHarnessConfig(
   }
 
   const raw = await readFile(path, 'utf8');
-  return harnessConfigSchema.parse(parse(raw));
+  return applyProductionEnvOverrides(harnessConfigSchema.parse(parse(raw)));
 }

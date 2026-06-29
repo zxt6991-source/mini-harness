@@ -130,6 +130,23 @@ orchestration:
     maxEntries: 1000
     maxValueCharacters: 20000
 
+production:
+  environment: development
+  featureGates:
+    schemaCache: true
+    modularPrompt: true
+    metrics: true
+  prompt:
+    cacheBoundaryCharacters: 48000
+    exposeMetadata: true
+  schemaCache:
+    enabled: true
+    maxEntries: 1000
+  metrics:
+    enabled: true
+    latencyWarningMs: 2000
+    errorRateWarningThreshold: 0.01
+
 security:
   sandboxDir: ./workspace
   allowNetwork: false

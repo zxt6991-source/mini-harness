@@ -44,12 +44,19 @@ export interface EngineOptions {
   budget?: Partial<RuntimeBudget>;
   drift?: DriftGuardOptions;
   outputGovernance?: ModelOutputGovernance;
+  metrics?: RuntimeMetricsSink;
 }
 
 export interface EngineRunOptions {
   abortSignal?: AbortSignal;
   metadata?: Record<string, unknown>;
 }
+
+export interface RuntimeMetricsSink {
+  record(event: EngineEvent): void;
+}
+
+type EngineEventInput = Parameters<typeof createEngineEvent>[0];
 
 /** 把用户输入文本包装成内部统一的 user 消息对象。 */
 function createUserMessage(input: string): Message {
@@ -145,8 +152,13 @@ export class Engine {
     const budgetManager = new BudgetManager(this.options.budget);
     const retryPolicy = resolveRetryPolicy(this.options.modelRetry);
     const driftGuard = new DriftGuard(this.options.drift);
+    const emit = (event: EngineEventInput): EngineEvent => {
+      const created = createEngineEvent(event);
+      this.options.metrics?.record(created);
+      return created;
+    };
 
-    yield createEngineEvent({
+    yield emit({
       type: 'agent_start',
       sessionId,
       traceId: state.traceId,
@@ -158,7 +170,7 @@ export class Engine {
     for (let step = 0; step < this.options.maxSteps; step++) {
       state.step = step;
 
-      yield createEngineEvent({
+      yield emit({
         type: 'turn_start',
         sessionId,
         traceId: state.traceId,
@@ -169,7 +181,7 @@ export class Engine {
       if (runOptions.abortSignal?.aborted) {
         state.terminationReason = 'aborted';
         const error = new RuntimeAbortedError();
-        yield createEngineEvent({
+        yield emit({
           type: 'runtime_error',
           sessionId,
           traceId: state.traceId,
@@ -182,7 +194,7 @@ export class Engine {
         throw error;
       }
 
-      yield createEngineEvent({
+      yield emit({
         type: 'model_start',
         sessionId,
         traceId: state.traceId,
@@ -218,7 +230,7 @@ export class Engine {
         } catch (error) {
           if (getErrorCode(error) === 'RUNTIME_BUDGET_EXCEEDED') {
             state.terminationReason = 'error';
-            yield createEngineEvent({
+            yield emit({
               type: 'runtime_error',
               sessionId,
               traceId: state.traceId,
@@ -234,7 +246,7 @@ export class Engine {
           state.modelCallCount++;
           const willRetry =
             isRetryableError(error) && attempt <= retryPolicy.maxRetries;
-          yield createEngineEvent({
+          yield emit({
             type: 'runtime_error',
             sessionId,
             traceId: state.traceId,
@@ -265,7 +277,7 @@ export class Engine {
       const originalToolCalls = assistantMessage.toolCalls ?? [];
       let executableToolCalls = originalToolCalls;
 
-      yield createEngineEvent({
+      yield emit({
         type: 'model_message',
         sessionId,
         traceId: state.traceId,
@@ -277,7 +289,7 @@ export class Engine {
       if (runOptions.abortSignal?.aborted) {
         state.terminationReason = 'aborted';
         const error = new RuntimeAbortedError();
-        yield createEngineEvent({
+        yield emit({
           type: 'runtime_error',
           sessionId,
           traceId: state.traceId,
@@ -294,7 +306,7 @@ export class Engine {
         this.options.outputGovernance?.validateAssistantMessage(assistantMessage);
 
       if (governanceReport) {
-        yield createEngineEvent({
+        yield emit({
           type: 'output_governance',
           sessionId,
           traceId: state.traceId,
@@ -312,7 +324,7 @@ export class Engine {
         if (!governanceReport.passed && this.options.outputGovernance?.mode === 'throw') {
           const first = governanceReport.rejectedToolCalls[0];
           state.terminationReason = 'error';
-          yield createEngineEvent({
+          yield emit({
             type: 'runtime_error',
             sessionId,
             traceId: state.traceId,
@@ -340,7 +352,7 @@ export class Engine {
           snapshot: snapshotRunState(state) as unknown as Record<string, unknown>,
         });
 
-        yield createEngineEvent({
+        yield emit({
           type: 'agent_end',
           sessionId,
           traceId: state.traceId,
@@ -367,7 +379,7 @@ export class Engine {
           await this.memory.save(sessionId, correctionMessage);
           state.messages.push(correctionMessage);
 
-          yield createEngineEvent({
+          yield emit({
             type: 'model_correction',
             sessionId,
             traceId: state.traceId,
@@ -380,7 +392,7 @@ export class Engine {
 
         if (executableToolCalls.length === 0) {
           state.step = step + 1;
-          yield createEngineEvent({
+          yield emit({
             type: 'turn_end',
             sessionId,
             traceId: state.traceId,
@@ -395,7 +407,7 @@ export class Engine {
       if (runOptions.abortSignal?.aborted) {
         state.terminationReason = 'aborted';
         const error = new RuntimeAbortedError();
-        yield createEngineEvent({
+        yield emit({
           type: 'runtime_error',
           sessionId,
           traceId: state.traceId,
@@ -409,7 +421,7 @@ export class Engine {
       }
 
       for (const toolCall of executableToolCalls) {
-        yield createEngineEvent({
+        yield emit({
           type: 'tool_start',
           sessionId,
           traceId: state.traceId,
@@ -433,7 +445,7 @@ export class Engine {
         });
       } catch (error) {
         state.terminationReason = 'error';
-        yield createEngineEvent({
+        yield emit({
           type: 'runtime_error',
           sessionId,
           traceId: state.traceId,
@@ -454,7 +466,7 @@ export class Engine {
         await this.memory.save(sessionId, resultMessage);
         state.messages.push(resultMessage);
 
-        yield createEngineEvent({
+        yield emit({
           type: 'tool_result',
           sessionId,
           traceId: state.traceId,
@@ -470,7 +482,7 @@ export class Engine {
         driftGuard.recordToolCalls(executableToolCalls);
       } catch (error) {
         state.terminationReason = 'drift_detected';
-        yield createEngineEvent({
+        yield emit({
           type: 'runtime_error',
           sessionId,
           traceId: state.traceId,
@@ -484,7 +496,7 @@ export class Engine {
       }
 
       state.step = step + 1;
-      yield createEngineEvent({
+      yield emit({
         type: 'turn_end',
         sessionId,
         traceId: state.traceId,
@@ -495,7 +507,7 @@ export class Engine {
     }
 
     state.terminationReason = 'max_steps_exceeded';
-    yield createEngineEvent({
+    yield emit({
       type: 'runtime_error',
       sessionId,
       traceId: state.traceId,

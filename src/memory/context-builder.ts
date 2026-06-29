@@ -1,5 +1,9 @@
 // 该文件负责为模型请求组装上下文，合并系统提示、摘要、相关记忆和最近消息。
 import type { Memory, Message } from '../core';
+import {
+  ModularPromptBuilder,
+  type PromptModuleInput,
+} from '../production/prompt';
 import { createId } from '../utils/id';
 import type { Summarizer } from './summarizer';
 import { analyzeContextRequirement } from './context-requirement';
@@ -7,6 +11,8 @@ import type { MemorySearchHit, MemorySearchQuery } from './types';
 
 export interface ContextBuilderOptions {
   systemPrompt?: string;
+  systemPromptModules?: PromptModuleInput[];
+  promptCacheBoundaryCharacters?: number;
   recentLimit?: number;
   searchTopK?: number;
   maxContextCharacters?: number;
@@ -14,11 +20,15 @@ export interface ContextBuilderOptions {
 }
 
 /** 创建用于注入系统提示或摘要内容的 system 消息。 */
-function createSystemMessage(content: string): Message {
+function createSystemMessage(
+  content: string,
+  metadata?: Record<string, unknown>,
+): Message {
   return {
     id: createId('msg'),
     role: 'system',
     content,
+    ...(metadata ? { metadata } : {}),
     createdAt: Date.now(),
   };
 }
@@ -78,12 +88,18 @@ function formatLongTermMemory(hits: MemorySearchHit[]): string {
 /** 根据最近消息、相关检索结果和摘要构建模型请求上下文。 */
 export class ContextBuilder {
   private readonly systemPrompt: string;
+  private readonly promptBuilder: ModularPromptBuilder | undefined;
   private readonly recentLimit: number;
   private readonly searchTopK: number;
 
   /** 初始化上下文构建参数，包括系统提示、最近消息数量和检索数量。 */
   constructor(private readonly options: ContextBuilderOptions = {}) {
     this.systemPrompt = options.systemPrompt ?? 'You are MiniHarness Agent.';
+    this.promptBuilder = options.systemPromptModules?.length
+      ? new ModularPromptBuilder(options.systemPromptModules, {
+          cacheBoundaryCharacters: options.promptCacheBoundaryCharacters,
+        })
+      : undefined;
     this.recentLimit = options.recentLimit ?? 20;
     this.searchTopK = options.searchTopK ?? 0;
   }
@@ -98,7 +114,7 @@ export class ContextBuilder {
       ? await this.options.summarizer.summarize(recent)
       : '';
 
-    const messages: Message[] = [createSystemMessage(this.systemPrompt)];
+    const messages: Message[] = [this.createSystemPromptMessage(sessionId, input)];
 
     if (summary.length > 0) {
       messages.push(createSystemMessage(`Conversation summary: ${summary}`));
@@ -125,6 +141,27 @@ export class ContextBuilder {
     return this.options.maxContextCharacters
       ? trimContext(messages, input.id, this.options.maxContextCharacters)
       : messages;
+  }
+
+  private createSystemPromptMessage(sessionId: string, input: Message): Message {
+    if (!this.promptBuilder) {
+      return createSystemMessage(this.systemPrompt);
+    }
+
+    const built = this.promptBuilder.build({
+      input: input.content,
+      sessionId,
+      inputId: input.id,
+    });
+
+    return createSystemMessage(built.prompt, {
+      promptCacheKey: built.metadata.cacheKey,
+      promptStaticCharacters: built.metadata.staticCharacters,
+      promptDynamicCharacters: built.metadata.dynamicCharacters,
+      promptTotalCharacters: built.metadata.totalCharacters,
+      promptCacheBoundaryCharacters: built.metadata.cacheBoundaryCharacters,
+      promptModuleBreakdown: built.metadata.moduleBreakdown,
+    });
   }
 
   /** 基于用户输入文本拆分查询词，从记忆中查找相关历史消息。 */
