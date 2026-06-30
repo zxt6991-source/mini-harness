@@ -10,8 +10,11 @@ import {
   ReasoningBudgetManager,
   Scratchpad,
   WorkflowStateMachine,
+  aggregateEvaluationResults,
+  checkEvaluationRegression,
   createModelProvider,
   createMemory,
+  evaluateEngineRun,
   evaluateOutput,
   normalizeTaskSpec,
   loadHarnessConfig,
@@ -37,6 +40,9 @@ describe('public exports', () => {
     expect(WorkflowStateMachine).toBeTypeOf('function');
     expect(normalizeTaskSpec).toBeTypeOf('function');
     expect(evaluateOutput).toBeTypeOf('function');
+    expect(evaluateEngineRun).toBeTypeOf('function');
+    expect(aggregateEvaluationResults).toBeTypeOf('function');
+    expect(checkEvaluationRegression).toBeTypeOf('function');
     expect(suggestToolName).toBeTypeOf('function');
   });
 });

@@ -74,6 +74,7 @@ export * from './production/feature-gates';
 export * from './production/metrics';
 export * from './production/prompt';
 export * from './production/schema-cache';
+export * from './evaluation';
 export * from './security/command';
 export * from './security/policy';
 export * from './security/path';

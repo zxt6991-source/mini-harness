@@ -182,4 +182,129 @@ describe('ProductionMetricsCollector', () => {
       },
     });
   });
+
+  it('summarizes continuous quality signals from runtime events', () => {
+    const metrics = new ProductionMetricsCollector();
+    const base = snapshot();
+
+    metrics.record(
+      createEngineEvent({
+        type: 'agent_start',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        inputLength: 5,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'model_message',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        message: {
+          id: 'assistant_1',
+          role: 'assistant',
+          content: 'call tools',
+          createdAt: Date.now(),
+        },
+        usage: {
+          inputTokens: 90,
+          outputTokens: 30,
+          totalTokens: 120,
+        },
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'tool_result',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        toolCallId: 'call_1',
+        toolName: 'search',
+        success: false,
+        latencyMs: 20,
+        errorCode: 'UPSTREAM_RATE_LIMIT',
+        retryable: true,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'tool_result',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        toolCallId: 'call_2',
+        toolName: 'search',
+        success: true,
+        latencyMs: 15,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'agent_end',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        message: {
+          id: 'assistant_2',
+          role: 'assistant',
+          content: 'done',
+          createdAt: Date.now(),
+        },
+        steps: 2,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'agent_start',
+        sessionId: 'session_2',
+        traceId: 'trace_2',
+        inputLength: 5,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'model_message',
+        sessionId: 'session_2',
+        traceId: 'trace_2',
+        message: {
+          id: 'assistant_3',
+          role: 'assistant',
+          content: 'still working',
+          createdAt: Date.now(),
+        },
+        usage: {
+          inputTokens: 45,
+          outputTokens: 15,
+          totalTokens: 60,
+        },
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'runtime_error',
+        sessionId: 'session_2',
+        traceId: 'trace_2',
+        phase: 'termination',
+        errorCode: 'MAX_STEPS_EXCEEDED',
+        retryable: false,
+        message: 'too many steps',
+        snapshot: base,
+      }),
+    );
+
+    const quality = metrics.snapshot().quality;
+
+    expect(quality).toMatchObject({
+      taskSuccessRate: 0.5,
+      averageTokensPerRun: 90,
+      errorRecoveryRate: 1,
+      duplicateToolCallRate: 0.5,
+    });
+    expect(quality.averageRunDurationMs).toBeGreaterThanOrEqual(0);
+  });
 });

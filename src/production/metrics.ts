@@ -50,6 +50,13 @@ export interface ProductionMetricsSnapshot {
     maxStep: number;
     completionRate: number;
   };
+  quality: {
+    taskSuccessRate: number;
+    averageRunDurationMs: number;
+    averageTokensPerRun: number;
+    errorRecoveryRate: number;
+    duplicateToolCallRate: number;
+  };
   health: {
     status: ProductionHealthStatus;
     alerts: ProductionHealthAlert[];
@@ -77,6 +84,13 @@ export class ProductionMetricsCollector {
   private runtimeErrorCount = 0;
   private turnCount = 0;
   private maxStep = 0;
+  private readonly runStartedAtByTraceId = new Map<string, number>();
+  private readonly runDurationSamples: number[] = [];
+  private readonly lastToolNameByTraceId = new Map<string, string>();
+  private readonly lastToolFailedByTraceId = new Map<string, boolean>();
+  private duplicateToolCallCount = 0;
+  private failedToolCallCount = 0;
+  private recoveredToolCallCount = 0;
 
   constructor(options: ProductionMetricsCollectorOptions = {}) {
     this.latencyWarningMs = options.latencyWarningMs ?? 2_000;
@@ -87,6 +101,7 @@ export class ProductionMetricsCollector {
     switch (event.type) {
       case 'agent_start':
         this.startedRuns++;
+        this.runStartedAtByTraceId.set(event.traceId, event.timestamp);
         break;
       case 'model_start':
         this.modelCallCount++;
@@ -105,6 +120,17 @@ export class ProductionMetricsCollector {
         this.totalToolLatencyMs += event.latencyMs;
         this.maxToolLatencyMs = Math.max(this.maxToolLatencyMs, event.latencyMs);
         this.toolLatencySamples.push(event.latencyMs);
+        if (this.lastToolNameByTraceId.get(event.traceId) === event.toolName) {
+          this.duplicateToolCallCount++;
+        }
+        if (event.success && this.lastToolFailedByTraceId.get(event.traceId) === true) {
+          this.recoveredToolCallCount++;
+        }
+        if (!event.success) {
+          this.failedToolCallCount++;
+        }
+        this.lastToolNameByTraceId.set(event.traceId, event.toolName);
+        this.lastToolFailedByTraceId.set(event.traceId, !event.success);
         if (event.success) {
           this.toolSuccessCount++;
         } else {
@@ -118,6 +144,9 @@ export class ProductionMetricsCollector {
         break;
       case 'runtime_error':
         this.runtimeErrorCount++;
+        if (event.metadata?.willRetry !== true) {
+          this.clearTraceState(event.traceId);
+        }
         break;
       case 'turn_end':
         this.turnCount++;
@@ -126,6 +155,7 @@ export class ProductionMetricsCollector {
       case 'agent_end':
         this.completedRuns++;
         this.maxStep = Math.max(this.maxStep, event.steps);
+        this.recordRunDuration(event.traceId, event.timestamp);
         break;
       default:
         break;
@@ -174,6 +204,23 @@ export class ProductionMetricsCollector {
         completionRate:
           this.startedRuns > 0 ? this.completedRuns / this.startedRuns : 0,
       },
+      quality: {
+        taskSuccessRate:
+          this.startedRuns > 0 ? this.completedRuns / this.startedRuns : 0,
+        averageRunDurationMs:
+          this.runDurationSamples.length > 0
+            ? this.runDurationSamples.reduce((sum, value) => sum + value, 0) /
+              this.runDurationSamples.length
+            : 0,
+        averageTokensPerRun:
+          this.startedRuns > 0 ? this.totalTokens / this.startedRuns : 0,
+        errorRecoveryRate:
+          this.failedToolCallCount > 0
+            ? this.recoveredToolCallCount / this.failedToolCallCount
+            : 0,
+        duplicateToolCallRate:
+          this.toolCallCount > 0 ? this.duplicateToolCallCount / this.toolCallCount : 0,
+      },
       health: {
         status: health.status,
         alerts: health.alerts,
@@ -192,6 +239,24 @@ export class ProductionMetricsCollector {
       Math.min(sorted.length - 1, Math.ceil((percentile / 100) * sorted.length) - 1),
     );
     return sorted[index];
+  }
+
+  private recordRunDuration(traceId: string, completedAt: number): void {
+    const startedAt = this.runStartedAtByTraceId.get(traceId);
+
+    if (startedAt === undefined) {
+      this.clearTraceState(traceId);
+      return;
+    }
+
+    this.runDurationSamples.push(Math.max(0, completedAt - startedAt));
+    this.clearTraceState(traceId);
+  }
+
+  private clearTraceState(traceId: string): void {
+    this.runStartedAtByTraceId.delete(traceId);
+    this.lastToolNameByTraceId.delete(traceId);
+    this.lastToolFailedByTraceId.delete(traceId);
   }
 
   private createHealthSnapshot(toolErrorRate: number): {
