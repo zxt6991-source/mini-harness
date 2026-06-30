@@ -163,10 +163,9 @@ MiniHarness/
 │   │
 │   ├── security/
 │   │   ├── policy.ts
+│   │   ├── command.ts
 │   │   ├── guard.ts
-│   │   ├── path.ts
-│   │   ├── sandbox.ts
-│   │   └── permission.ts
+│   │   └── path.ts
 │   │
 │   ├── utils/
 │   │   ├── config.ts
@@ -1592,11 +1591,36 @@ health.alerts
 
 ## 5.9 `security/` 安全防护
 
-安全模块应在工具调用、文件访问、命令执行前生效。
+安全模块在工具调用、文件访问、命令执行前生效。当前安全链路采用第十二章 Harness 安全体系中的轻量纵深防护：
+
+```text
+工具策略 allow/deny -> 网络/Shell 大类开关 -> 参数约束 -> 路径五层校验 -> 命令护栏 -> 工具执行
+```
+
+本阶段不引入 Docker/VM 沙箱和交互式审批 UI；权限拒绝统一以 `ToolPermissionError` 抛出，并进入 `ToolExecutor` 的结构化日志。
 
 ### 5.9.1 安全策略
 
 ```ts
+export interface SecurityPathValidationPolicy {
+  enabled?: boolean;
+  maxPathLength?: number;
+  pathParameterNames?: string[];
+}
+
+export interface SecurityCommandGuardrailsPolicy {
+  enabled?: boolean;
+  dangerousCommands?: string[];
+  safeSubcommands?: Record<string, string[]>;
+  blockShellControlOperators?: boolean;
+  blockInlineExecution?: boolean;
+}
+
+export interface SecurityNumericRange {
+  min: number;
+  max: number;
+}
+
 export interface SecurityPolicy {
   allowTools: string[];
   denyTools: string[];
@@ -1604,46 +1628,103 @@ export interface SecurityPolicy {
   allowNetwork: boolean;
   allowShell: boolean;
   allowedShellCommands: string[];
+  pathValidation?: SecurityPathValidationPolicy;
+  commandGuardrails?: SecurityCommandGuardrailsPolicy;
+  parameterConstraints?: {
+    timeoutMs?: SecurityNumericRange;
+    timeout_seconds?: SecurityNumericRange;
+    memoryMb?: SecurityNumericRange;
+    memory_mb?: SecurityNumericRange;
+    fileSizeMb?: SecurityNumericRange;
+    file_size_mb?: SecurityNumericRange;
+  };
+  audit?: {
+    enabled?: boolean;
+  };
 }
 ```
 
+策略语义：
+
+| 字段 | 说明 |
+|---|---|
+| `allowTools` / `denyTools` | 工具级白名单与黑名单；deny 优先 |
+| `allowNetwork` | 是否允许 `network` 类工具或声明 `network` 权限的工具 |
+| `allowShell` | 是否允许 `execution` 类工具或声明 `shell` 权限的工具 |
+| `allowedShellCommands` | 非空时，Shell 命令链中的每个实际命令都必须在列表内 |
+| `pathValidation` | 控制路径参数名、路径最大长度和五层路径校验开关 |
+| `commandGuardrails` | 控制危险命令、Shell 控制符、内联解释器入口和安全子命令 |
+| `parameterConstraints` | 限制 timeout、memory、file size 等资源参数 |
+| `audit` | 当前通过结构化日志记录安全拒绝，后续可接入独立审计 sink |
+
 ### 5.9.2 路径校验
 
-```ts
-import path from 'node:path';
+`validateSandboxPath(baseDir, targetPath, options?)` 不再只做字符串前缀判断，而是按 5 层顺序处理：
 
-export function validateSandboxPath(baseDir: string, targetPath: string): string {
-  const base = path.resolve(baseDir);
-  const target = path.resolve(baseDir, targetPath);
-
-  if (!target.startsWith(base + path.sep) && target !== base) {
-    throw new Error(`Path escapes sandbox: ${targetPath}`);
-  }
-
-  return target;
-}
+```text
+1. 长度检查，默认 maxPathLength = 4096
+2. 迭代 URL 解码，覆盖 ..%2f 和 ..%252f
+3. Unicode NFC 规范化
+4. 统一反斜杠为正斜杠，并做 posix normalize
+5. 解析 realpath，再用 path.relative 判断最终路径是否仍在 sandbox 内
 ```
 
 该函数用于防止：
 
 ```text
 ../../etc/passwd
-/root/.ssh/id_rsa
-C:\Windows\System32\config
+..%2f..%2fetc%2fpasswd
+..%252f..%252fetc%252fpasswd
+subdir\..\..\secret.txt
+/tmp/workspace-evil/file.txt
+workspace/link_to_outside
 ```
 
-### 5.9.3 命令执行控制
+对于不存在的目标文件，校验器会解析最近存在的父路径，兼容“准备写入新文件”的场景，同时避免符号链接父目录逃逸。
 
-Shell 工具必须限制：
+### 5.9.3 命令护栏
+
+`src/security/command.ts` 提供 `detectDangerousCommand()` 和 `extractShellCommands()`。
+
+默认阻止的高风险入口：
 
 ```text
-1. 是否允许启用 shell
-2. 命令白名单
-3. 工作目录必须在 sandbox 内
-4. 超时时间
-5. 输出最大长度
-6. 环境变量脱敏
+rm, dd, mkfs, shred, sysctl, iptables, insmod, rmmod,
+reboot, shutdown, chown, chmod, sudo, passwd, useradd,
+userdel, groupadd, crontab, visudo, mount, umount,
+cryptsetup, gdisk, mdadm, lvcreate, lvremove, apt, yum, zypper
 ```
+
+命令护栏还会处理：
+
+| 场景 | 行为 |
+|---|---|
+| `cat file \| rm -rf /tmp/data` | 管道两侧命令都会检查，命中 `rm` 后拒绝 |
+| `bash -c "rm -rf /"` | 默认阻止内联解释器执行入口 |
+| `python -c "..."` / `node -e "..."` | 默认阻止 |
+| `apt list` | 允许，因为属于安全查询子命令 |
+| `apt install curl` | 拒绝，因为会修改系统状态 |
+| `echo ok; rm -rf /` | 默认阻止 Shell 控制符 |
+
+### 5.9.4 参数约束与执行前检查
+
+`SecurityGuard.checkToolPermission()` 当前在工具执行前检查：
+
+```text
+1. 工具名是否命中 denyTools。
+2. 非空 allowTools 是否包含该工具。
+3. network / shell 大类权限是否开启。
+4. timeoutMs、timeout_seconds、memoryMb、memory_mb、fileSizeMb、file_size_mb 是否在允许范围内。
+5. file 类工具的 path/filePath/dirPath/cwd/workspaceDir 等参数是否在 sandbox 内。
+6. execution 类工具的 command 是否通过命令护栏和 allowedShellCommands。
+```
+
+仍未落地的边界：
+
+- 无交互式 `ASK` / `APPROVE_ONCE` 审批缓存。
+- 无容器级或 VM 级执行沙箱。
+- 无独立安全事件 sink，当前复用工具执行结构化日志。
+- 无长期记忆投毒清理策略，后续应在 `memory/` 层补充来源追踪和审计。
 
 ---
 
@@ -1889,9 +1970,45 @@ production:
 
 security:
   sandboxDir: ./workspace
+  allowTools: []
+  denyTools: []
   allowNetwork: false
   allowShell: false
   allowShellCommands: []
+  pathValidation:
+    enabled: true
+    maxPathLength: 4096
+    pathParameterNames:
+      - path
+      - filePath
+      - dirPath
+      - cwd
+      - workspaceDir
+  commandGuardrails:
+    enabled: true
+    blockShellControlOperators: true
+    blockInlineExecution: true
+  parameterConstraints:
+    timeoutMs:
+      min: 1
+      max: 300000
+    timeout_seconds:
+      min: 1
+      max: 300
+    memoryMb:
+      min: 1
+      max: 2048
+    memory_mb:
+      min: 1
+      max: 2048
+    fileSizeMb:
+      min: 1
+      max: 1024
+    file_size_mb:
+      min: 1
+      max: 1024
+  audit:
+    enabled: true
 
 reliability:
   enableTrace: true
@@ -1910,6 +2027,9 @@ reliability:
 | `modelRetry` | 模型调用重试策略，仅重试 `retryable` 错误；支持 `maxRetries`、`initialBackoffMs`、`maxBackoffMs`、`jitterRatio` |
 | `budget` | 单次任务模型调用次数、估算 token、上下文字符数限制 |
 | `drift` | 重复工具调用和工具调用总数保护 |
+| `security.pathValidation` | 文件路径参数的长度、编码、Unicode、反斜杠、符号链接和 sandbox 边界校验 |
+| `security.commandGuardrails` | execution 工具的危险命令、Shell 控制符、内联解释器入口和安全子命令控制 |
+| `security.parameterConstraints` | 工具资源参数范围，避免超长 timeout、大内存或超大文件操作 |
 
 模型治理相关配置说明：
 
@@ -2113,6 +2233,7 @@ tools/pipeline.ts
 tools/builtin/echo.ts
 tools/builtin/file.ts
 security/guard.ts
+security/command.ts
 security/path.ts
 reliability/logger.ts
 ```
@@ -2121,10 +2242,11 @@ reliability/logger.ts
 
 ```text
 1. 工具可以注册到 Registry。
-2. 工具调用前能做权限校验。
-3. 文件工具不能越过 sandbox。
-4. 工具执行有超时控制。
-5. 工具调用有结构化日志。
+2. 工具调用前能做工具名、network、shell 权限校验。
+3. 文件工具路径参数经过五层路径校验，不能越过 sandbox。
+4. execution 工具命令经过危险命令、管道、内联解释器和 allowlist 护栏。
+5. 工具资源参数有范围约束，工具执行有超时控制。
+6. 工具调用和安全拒绝有结构化日志。
 ```
 
 ---
@@ -2476,7 +2598,7 @@ Feature Gate -> 配置和环境变量
 7. runtime/tool-scheduler.ts
 8. runtime/retry.ts + runtime/budget.ts + runtime/drift.ts
 9. tools/executor.ts
-10. security/guard.ts
+10. security/path.ts + security/command.ts + security/guard.ts
 11. reliability/logger.ts
 12. models/openai-provider.ts
 13. mcp/
@@ -2525,7 +2647,7 @@ runEvents -> 工具并发调度 -> 错误观察 -> 模型重试 -> 预算控制 
 | configs/harness.yaml | 默认配置文件 |
 | examples/ | 普通对话、工具调用、MCP 示例 |
 | tests/ | 单元测试和集成测试 |
-| 架构文档 | 本技术方案、模块设计文档和生产级优化技术实现文档 |
+| 架构文档 | 本技术方案、模块设计文档、生产级优化技术实现文档和 Harness 安全体系优化技术实现文档 |
 
 ---
 

@@ -519,6 +519,86 @@ const productionConfigSchema = z
     },
   });
 
+const securityNumericRangeConfigSchema = z.object({
+  min: z.number(),
+  max: z.number(),
+});
+
+const securityConfigSchema = z
+  .object({
+    allowTools: z.array(z.string()).default([]),
+    denyTools: z.array(z.string()).default([]),
+    sandboxDir: z.string().default('./workspace'),
+    allowNetwork: z.boolean().default(false),
+    allowShell: z.boolean().default(false),
+    allowedShellCommands: z.array(z.string()).default([]),
+    pathValidation: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxPathLength: z.number().int().positive().default(4096),
+        pathParameterNames: z
+          .array(z.string())
+          .default(['path', 'filePath', 'dirPath', 'cwd', 'workspaceDir']),
+      })
+      .default({
+        enabled: true,
+        maxPathLength: 4096,
+        pathParameterNames: ['path', 'filePath', 'dirPath', 'cwd', 'workspaceDir'],
+      }),
+    commandGuardrails: z
+      .object({
+        enabled: z.boolean().default(true),
+        dangerousCommands: z.array(z.string()).optional(),
+        safeSubcommands: z.record(z.string(), z.array(z.string())).optional(),
+        blockShellControlOperators: z.boolean().default(true),
+        blockInlineExecution: z.boolean().default(true),
+      })
+      .default({
+        enabled: true,
+        blockShellControlOperators: true,
+        blockInlineExecution: true,
+      }),
+    parameterConstraints: z
+      .object({
+        timeoutMs: securityNumericRangeConfigSchema.optional(),
+        timeout_seconds: securityNumericRangeConfigSchema.optional(),
+        memoryMb: securityNumericRangeConfigSchema.optional(),
+        memory_mb: securityNumericRangeConfigSchema.optional(),
+        fileSizeMb: securityNumericRangeConfigSchema.optional(),
+        file_size_mb: securityNumericRangeConfigSchema.optional(),
+      })
+      .default({}),
+    audit: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({
+        enabled: true,
+      }),
+  })
+  .default({
+    allowTools: [],
+    denyTools: [],
+    sandboxDir: './workspace',
+    allowNetwork: false,
+    allowShell: false,
+    allowedShellCommands: [],
+    pathValidation: {
+      enabled: true,
+      maxPathLength: 4096,
+      pathParameterNames: ['path', 'filePath', 'dirPath', 'cwd', 'workspaceDir'],
+    },
+    commandGuardrails: {
+      enabled: true,
+      blockShellControlOperators: true,
+      blockInlineExecution: true,
+    },
+    parameterConstraints: {},
+    audit: {
+      enabled: true,
+    },
+  });
+
 const harnessConfigSchema = z
   .object({
     runtime: runtimeConfigSchema,
@@ -527,6 +607,7 @@ const harnessConfigSchema = z
     outputGovernance: outputGovernanceConfigSchema,
     orchestration: orchestrationConfigSchema,
     production: productionConfigSchema,
+    security: securityConfigSchema,
   })
   .passthrough();
 

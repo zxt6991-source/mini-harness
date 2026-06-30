@@ -150,9 +150,45 @@ production:
 
 security:
   sandboxDir: ./workspace
+  allowTools: []
+  denyTools: []
   allowNetwork: false
   allowShell: false
   allowShellCommands: []
+  pathValidation:
+    enabled: true
+    maxPathLength: 4096
+    pathParameterNames:
+      - path
+      - filePath
+      - dirPath
+      - cwd
+      - workspaceDir
+  commandGuardrails:
+    enabled: true
+    blockShellControlOperators: true
+    blockInlineExecution: true
+  parameterConstraints:
+    timeoutMs:
+      min: 1
+      max: 300000
+    timeout_seconds:
+      min: 1
+      max: 300
+    memoryMb:
+      min: 1
+      max: 2048
+    memory_mb:
+      min: 1
+      max: 2048
+    fileSizeMb:
+      min: 1
+      max: 1024
+    file_size_mb:
+      min: 1
+      max: 1024
+  audit:
+    enabled: true
 
 reliability:
   enableTrace: true
