@@ -3,12 +3,14 @@ export interface RetryPolicyOptions {
   maxRetries?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
+  jitterRatio?: number;
 }
 
 export const defaultRetryPolicy: Required<RetryPolicyOptions> = {
   maxRetries: 0,
   initialBackoffMs: 250,
   maxBackoffMs: 2_000,
+  jitterRatio: 0,
 };
 
 /** 等待指定毫秒数，供重试退避使用。 */
@@ -29,6 +31,10 @@ export function resolveRetryPolicy(
     initialBackoffMs:
       options?.initialBackoffMs ?? defaultRetryPolicy.initialBackoffMs,
     maxBackoffMs: options?.maxBackoffMs ?? defaultRetryPolicy.maxBackoffMs,
+    jitterRatio: Math.max(
+      0,
+      options?.jitterRatio ?? defaultRetryPolicy.jitterRatio,
+    ),
   };
 }
 
@@ -46,9 +52,41 @@ export function isRetryableError(error: unknown): boolean {
 export function getRetryDelayMs(
   attempt: number,
   policy: Required<RetryPolicyOptions>,
+  random: () => number = Math.random,
 ): number {
-  const delay = policy.initialBackoffMs * 2 ** Math.max(0, attempt - 1);
-  return Math.min(delay, policy.maxBackoffMs);
+  const baseDelay = Math.min(
+    policy.initialBackoffMs * 2 ** Math.max(0, attempt - 1),
+    policy.maxBackoffMs,
+  );
+
+  if (baseDelay <= 0 || policy.jitterRatio <= 0) {
+    return baseDelay;
+  }
+
+  const jitter = random() * baseDelay * policy.jitterRatio;
+  return Math.min(baseDelay + jitter, policy.maxBackoffMs);
+}
+
+/** 使用 Promise 级超时包装异步操作，供模型、工具或外部调用复用。 */
+export async function runWithTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number | undefined,
+  createError: () => Error = () =>
+    new Error(`Operation timed out after ${timeoutMs ?? 0}ms`),
+): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return operation();
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(createError());
+    }, timeoutMs);
+
+    operation()
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout));
+  });
 }
 
 /** 使用给定重试策略执行异步操作，直到成功或达到重试上限。 */

@@ -73,6 +73,7 @@ model:
           maxRetries: 0,
           initialBackoffMs: 250,
           maxBackoffMs: 2000,
+          jitterRatio: 0,
         },
         budget: {
           maxModelCalls: 20,
@@ -123,6 +124,7 @@ model:
           maxRetries: 0,
           initialBackoffMs: 250,
           maxBackoffMs: 2000,
+          jitterRatio: 0,
         },
         budget: {
           maxModelCalls: 20,
@@ -201,6 +203,7 @@ outputGovernance:
           maxRetries: 0,
           initialBackoffMs: 250,
           maxBackoffMs: 2000,
+          jitterRatio: 0,
         },
         budget: {
           maxModelCalls: 20,

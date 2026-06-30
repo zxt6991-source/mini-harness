@@ -78,6 +78,9 @@ export interface ToolResultEvent extends BaseEngineEvent {
   toolName: string;
   success: boolean;
   latencyMs: number;
+  errorCode?: string;
+  errorName?: string;
+  retryable?: boolean;
 }
 
 export interface TurnEndEvent extends BaseEngineEvent {

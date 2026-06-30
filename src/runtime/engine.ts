@@ -90,6 +90,24 @@ function getRetryable(error: unknown): boolean | undefined {
     : undefined;
 }
 
+/** 从消息 metadata 中提取字符串字段。 */
+function getMetadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** 从消息 metadata 中提取布尔字段。 */
+function getMetadataBoolean(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): boolean | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 function hasMemoryLifecycle(memory: Memory): memory is Memory & MemoryLifecycle {
   return (
     'onRunEnd' in memory &&
@@ -474,6 +492,9 @@ export class Engine {
           toolName: toolCall.name,
           success: resultMessage.metadata?.success === true,
           latencyMs: result.latencyMs,
+          errorCode: getMetadataString(resultMessage.metadata, 'errorCode'),
+          errorName: getMetadataString(resultMessage.metadata, 'errorName'),
+          retryable: getMetadataBoolean(resultMessage.metadata, 'retryable'),
           snapshot: snapshotRunState(state),
         });
       }

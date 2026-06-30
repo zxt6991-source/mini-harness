@@ -21,7 +21,11 @@ async function main() {
       : false;
   const metrics =
     config.production.metrics.enabled && featureGates.isEnabled('metrics')
-      ? new ProductionMetricsCollector()
+      ? new ProductionMetricsCollector({
+          latencyWarningMs: config.production.metrics.latencyWarningMs,
+          errorRateWarningThreshold:
+            config.production.metrics.errorRateWarningThreshold,
+        })
       : undefined;
   const tools = new DefaultToolRegistry(undefined, { schemaCache });
 

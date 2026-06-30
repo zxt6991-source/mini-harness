@@ -168,4 +168,58 @@ describe('Engine runEvents', () => {
       },
     });
   });
+
+  it('emits tool_result error metadata for failed tool observations', async () => {
+    const provider = new SequenceProvider([
+      assistant('call unreliable', [
+        {
+          id: 'call_1',
+          name: 'unreliable',
+          arguments: {},
+        },
+      ]),
+      assistant('recovered'),
+    ]);
+    const unreliableTool: Tool = {
+      name: 'unreliable',
+      description: 'Unreliable',
+      schema: { type: 'object' },
+      async call() {
+        return {
+          success: false,
+          content: 'rate limited',
+          metadata: {
+            errorCode: 'UPSTREAM_RATE_LIMIT',
+            errorName: 'RateLimitError',
+            retryable: true,
+          },
+        };
+      },
+    };
+    const registry = new DefaultToolRegistry();
+    registry.register(unreliableTool);
+    const engine = new Engine(provider, new InMemoryStore(), registry, {
+      maxSteps: 4,
+      requestTimeoutMs: 1_000,
+      enableStream: false,
+      toolErrorMode: 'observe',
+    });
+
+    const events: EngineEvent[] = [];
+    for await (const event of engine.runEvents('hello', 'session_1')) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        toolCallId: 'call_1',
+        toolName: 'unreliable',
+        success: false,
+        errorCode: 'UPSTREAM_RATE_LIMIT',
+        errorName: 'RateLimitError',
+        retryable: true,
+      }),
+    );
+  });
 });

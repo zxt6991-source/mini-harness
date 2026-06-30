@@ -28,9 +28,28 @@ function getErrorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+/** 从未知错误中提取是否可恢复的标记。 */
+function getRetryable(error: unknown): boolean | undefined {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'retryable' in error &&
+    typeof error.retryable === 'boolean'
+  ) {
+    return error.retryable;
+  }
+
+  if (error instanceof ToolTimeoutError) {
+    return true;
+  }
+
+  return undefined;
+}
+
 /** 把工具执行错误转换成可反馈给模型的 tool 消息。 */
 function createErrorObservation(toolCall: ToolCall, error: unknown): Message {
   const errorName = error instanceof Error ? error.name : 'Error';
+  const retryable = getRetryable(error);
 
   return {
     id: toolCall.id,
@@ -43,6 +62,7 @@ function createErrorObservation(toolCall: ToolCall, error: unknown): Message {
       success: false,
       errorCode: getErrorCode(error),
       errorName,
+      ...(retryable !== undefined ? { retryable } : {}),
     },
   };
 }

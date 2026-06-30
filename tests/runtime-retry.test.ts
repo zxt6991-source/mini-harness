@@ -8,6 +8,11 @@ import type {
 import { ModelProviderError } from '../src/core';
 import { Engine } from '../src/runtime/engine';
 import { InMemoryStore } from '../src/memory/local-store';
+import {
+  getRetryDelayMs,
+  resolveRetryPolicy,
+  runWithTimeout,
+} from '../src/runtime/retry';
 import { DefaultToolRegistry } from '../src/tools/registry';
 
 class FlakyProvider implements ModelProvider {
@@ -43,6 +48,37 @@ function assistant(content: string): Message {
 }
 
 describe('runtime model retry', () => {
+  it('applies bounded jitter to retry delays when configured', () => {
+    const policy = resolveRetryPolicy({
+      initialBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterRatio: 0.5,
+    });
+
+    expect(getRetryDelayMs(2, policy, () => 0.5)).toBe(250);
+  });
+
+  it(
+    'wraps long-running operations with a reusable timeout error',
+    async () => {
+      class CustomTimeoutError extends Error {
+        code = 'CUSTOM_TIMEOUT';
+      }
+
+      await expect(
+        runWithTimeout(
+          () => new Promise((resolve) => setTimeout(() => resolve('late'), 25)),
+          1,
+          () => new CustomTimeoutError('operation timed out'),
+        ),
+      ).rejects.toMatchObject({
+        code: 'CUSTOM_TIMEOUT',
+        message: 'operation timed out',
+      });
+    },
+    500,
+  );
+
   it('retries retryable model errors before returning a final message', async () => {
     const provider = new FlakyProvider(
       [

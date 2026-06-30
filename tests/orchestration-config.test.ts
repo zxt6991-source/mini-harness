@@ -5,6 +5,35 @@ import { describe, expect, it } from 'vitest';
 import { loadHarnessConfig } from '../src/utils/config';
 
 describe('orchestration config', () => {
+  it('loads runtime retry jitter ratio', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'miniharness-runtime-retry-config-'));
+    const configPath = join(dir, 'harness.yaml');
+    await writeFile(
+      configPath,
+      `
+runtime:
+  maxSteps: 4
+  requestTimeoutMs: 1000
+  modelRetry:
+    maxRetries: 2
+    initialBackoffMs: 100
+    maxBackoffMs: 1000
+    jitterRatio: 0.25
+model:
+  provider: mock
+`,
+    );
+
+    const config = await loadHarnessConfig(configPath);
+
+    expect(config.runtime.modelRetry).toMatchObject({
+      maxRetries: 2,
+      initialBackoffMs: 100,
+      maxBackoffMs: 1000,
+      jitterRatio: 0.25,
+    });
+  });
+
   it('loads orchestration defaults and normalizes legacy enable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'miniharness-orchestration-config-'));
     const configPath = join(dir, 'harness.yaml');

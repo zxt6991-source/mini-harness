@@ -8,6 +8,8 @@ import type {
 import { InMemoryStore } from '../src/memory/local-store';
 import { ProductionMetricsCollector } from '../src/production/metrics';
 import { Engine } from '../src/runtime/engine';
+import { createEngineEvent } from '../src/runtime/events';
+import type { RunSnapshot } from '../src/runtime/state';
 import { EchoTool } from '../src/tools/builtin/echo';
 import { DefaultToolRegistry } from '../src/tools/registry';
 
@@ -43,6 +45,20 @@ function assistant(content: string, toolCalls: Message['toolCalls'] = []): Messa
     content,
     toolCalls,
     createdAt: Date.now(),
+  };
+}
+
+function snapshot(): RunSnapshot {
+  return {
+    sessionId: 'session_1',
+    traceId: 'trace_1',
+    step: 0,
+    messageCount: 1,
+    modelCallCount: 0,
+    toolCallCount: 0,
+    estimatedTokens: 0,
+    usedTokens: 0,
+    elapsedMs: 0,
   };
 }
 
@@ -90,5 +106,80 @@ describe('ProductionMetricsCollector', () => {
       },
     });
     expect(metrics.snapshot().tools.maxLatencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports percentile latency, error buckets, and degraded health', () => {
+    const metrics = new ProductionMetricsCollector({
+      latencyWarningMs: 50,
+      errorRateWarningThreshold: 0.25,
+    });
+    const base = snapshot();
+
+    metrics.record(
+      createEngineEvent({
+        type: 'agent_start',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        inputLength: 5,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'tool_result',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        toolCallId: 'call_1',
+        toolName: 'fast',
+        success: true,
+        latencyMs: 10,
+        snapshot: base,
+      }),
+    );
+    metrics.record(
+      createEngineEvent({
+        type: 'tool_result',
+        sessionId: 'session_1',
+        traceId: 'trace_1',
+        toolCallId: 'call_2',
+        toolName: 'slow',
+        success: false,
+        latencyMs: 120,
+        errorCode: 'TOOL_TIMEOUT',
+        errorName: 'ToolTimeoutError',
+        retryable: true,
+        snapshot: base,
+      }),
+    );
+
+    expect(metrics.snapshot()).toMatchObject({
+      tools: {
+        callCount: 2,
+        successCount: 1,
+        errorCount: 1,
+        successRate: 0.5,
+        errorRate: 0.5,
+        p99LatencyMs: 120,
+        errorsByCode: {
+          TOOL_TIMEOUT: 1,
+        },
+      },
+      runtime: {
+        startedRuns: 1,
+      },
+      health: {
+        status: 'critical',
+        alerts: expect.arrayContaining([
+          expect.objectContaining({
+            level: 'critical',
+            code: 'tool_error_rate_high',
+          }),
+          expect.objectContaining({
+            level: 'warning',
+            code: 'tool_latency_high',
+          }),
+        ]),
+      },
+    });
   });
 });

@@ -14,11 +14,13 @@ const runtimeRetryConfigSchema = z
     maxRetries: z.number().int().nonnegative().default(0),
     initialBackoffMs: z.number().int().nonnegative().default(250),
     maxBackoffMs: z.number().int().nonnegative().default(2_000),
+    jitterRatio: z.number().min(0).max(1).default(0),
   })
   .default({
     maxRetries: 0,
     initialBackoffMs: 250,
     maxBackoffMs: 2_000,
+    jitterRatio: 0,
   });
 
 const runtimeBudgetConfigSchema = z
@@ -72,6 +74,7 @@ const runtimeConfigSchema = z
       maxRetries: 0,
       initialBackoffMs: 250,
       maxBackoffMs: 2_000,
+      jitterRatio: 0,
     },
     budget: {
       maxModelCalls: 20,

@@ -109,6 +109,8 @@ export class DefaultToolRegistry implements ToolRegistry {
         toolCallId: toolCall.id,
         toolName: tool.name,
         success: result.success,
+        ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+        ...(result.errorName ? { errorName: result.errorName } : {}),
         ...result.metadata,
       },
     };
