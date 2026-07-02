@@ -1,11 +1,35 @@
 {
   "name": "miniharness",
   "version": "0.1.0",
+  "description": "Lightweight TypeScript agent harness runtime.",
   "type": "module",
   "private": true,
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "configs/harness.yaml",
+    ".env.example"
+  ],
   "scripts": {
     "dev": "tsx src/main.ts",
     "build": "tsup src/index.ts --format esm,cjs --dts",
+    "smoke:mock": "tsx scripts/smoke-mock.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

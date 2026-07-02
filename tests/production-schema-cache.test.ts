@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ToolSchemaCache } from '../src/production/schema-cache';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  PersistentToolSchemaCache,
+  ToolSchemaCache,
+} from '../src/production/schema-cache';
 import { EchoTool } from '../src/tools/builtin/echo';
 import { DefaultToolRegistry } from '../src/tools/registry';
 
@@ -38,6 +44,51 @@ describe('ToolSchemaCache', () => {
 
     expect(cache.stats().entries).toBe(2);
     expect(cache.get(first.hash)).toBeUndefined();
+  });
+
+  it('hydrates cache entries from a snapshot', () => {
+    const first = new ToolSchemaCache();
+    const entry = first.remember({
+      type: 'object',
+      properties: { text: { type: 'string' } },
+    });
+    first.remember({
+      properties: { text: { type: 'string' } },
+      type: 'object',
+    });
+
+    const second = new ToolSchemaCache({ maxEntries: 10 });
+    second.hydrate(first.snapshot());
+
+    expect(second.get(entry.hash)).toMatchObject({
+      hash: entry.hash,
+      hits: 2,
+    });
+    expect(second.stats()).toMatchObject({
+      entries: 1,
+      hits: 2,
+      maxEntries: 10,
+    });
+  });
+
+  it('persists schema cache entries across instances', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'miniharness-schema-cache-'));
+    const first = new PersistentToolSchemaCache({ rootDir, maxEntries: 10 });
+    const entry = first.remember({
+      type: 'object',
+      properties: { text: { type: 'string' } },
+    });
+
+    const second = new PersistentToolSchemaCache({ rootDir, maxEntries: 10 });
+
+    expect(second.get(entry.hash)).toMatchObject({
+      hash: entry.hash,
+      hits: 1,
+    });
+    expect(second.stats()).toMatchObject({
+      entries: 1,
+      hits: 1,
+    });
   });
 });
 

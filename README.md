@@ -27,6 +27,7 @@ pnpm dev
 pnpm test
 pnpm typecheck
 pnpm build
+pnpm smoke:mock
 ```
 
 ## Project Structure
@@ -142,7 +143,55 @@ DEEPSEEK_API_KEY=sk-<redacted>
 
 `loadHarnessConfig()` reads `.env` automatically before creating the configured provider. Values already set in the shell take precedence over `.env` values.
 
-The default configuration still uses `provider: mock`, so local development and tests do not require a real model API key.
+Tests and `pnpm smoke:mock` override the provider to `mock`, so the normal verification path does not require a real model API key. The checked-in `configs/harness.yaml` can point at a real provider such as DeepSeek for local manual runs.
+
+## Production Assembly
+
+Use `createHarness(config)` when embedding MiniHarness in an application or service. It applies the same production wiring used by the local demo: feature gates, model provider, memory, tool registry, security guard, tool executor, output governance, metrics, and runtime engine.
+
+```ts
+import { createHarness, loadHarnessConfig } from 'miniharness';
+
+const config = await loadHarnessConfig('configs/harness.yaml');
+const harness = createHarness(config);
+
+const response = await harness.engine.run('hello', 'session_1');
+console.log(response.content);
+```
+
+For a no-network production wiring smoke test:
+
+```bash
+pnpm smoke:mock
+```
+
+## HTTP Service Adapter
+
+`createMiniHarnessHttpServer()` wraps the same harness instance as a Node HTTP server. The service adapter exposes JSON run, SSE event stream, health, readiness, and metrics endpoints.
+
+```ts
+import {
+  createHarness,
+  createMiniHarnessHttpServer,
+  loadHarnessConfig,
+} from 'miniharness';
+
+const config = await loadHarnessConfig('configs/harness.yaml');
+const harness = createHarness(config);
+const server = createMiniHarnessHttpServer(harness);
+
+server.listen(3000);
+```
+
+Endpoints:
+
+```text
+POST /v1/runs
+POST /v1/runs/stream
+GET  /healthz
+GET  /readyz
+GET  /metrics
+```
 
 ## Memory and Context
 
@@ -314,7 +363,7 @@ orchestration:
     maxBackoffMs: 5000
   checkpoint:
     enabled: true
-    store: memory
+    store: memory # memory | jsonl
     rootDir: .miniharness/orchestration/checkpoints
   messages:
     maxQueueSize: 1000
@@ -322,4 +371,27 @@ orchestration:
   scratchpad:
     maxEntries: 1000
     maxValueCharacters: 20000
+```
+
+For restart recovery, use the file-backed checkpoint store:
+
+```yaml
+orchestration:
+  checkpoint:
+    enabled: true
+    store: jsonl
+    rootDir: .miniharness/orchestration/checkpoints
+```
+
+`FileCheckpointStore` writes the latest checkpoint per workflow run and appends `checkpoints.jsonl` for audit/replay.
+
+Schema cache can also be restored across process restarts:
+
+```yaml
+production:
+  schemaCache:
+    enabled: true
+    store: json # memory | json
+    rootDir: .miniharness/production/schema-cache
+    maxEntries: 1000
 ```

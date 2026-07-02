@@ -1,8 +1,21 @@
 // 该文件实现工具 JSON Schema 的稳定 hash 与进程内缓存统计。
 import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
 
 export interface ToolSchemaCacheOptions {
   maxEntries?: number;
+}
+
+export interface PersistentToolSchemaCacheOptions extends ToolSchemaCacheOptions {
+  rootDir: string;
+  fileName?: string;
 }
 
 export interface ToolSchemaCacheEntry {
@@ -20,6 +33,10 @@ export interface ToolSchemaCacheStats {
   hits: number;
   totalSchemaCharacters: number;
   maxEntries: number;
+}
+
+export interface ToolSchemaCacheSnapshot {
+  entries: ToolSchemaCacheEntry[];
 }
 
 function stableStringify(value: unknown): string {
@@ -95,6 +112,25 @@ export class ToolSchemaCache {
     };
   }
 
+  snapshot(): ToolSchemaCacheSnapshot {
+    return {
+      entries: [...this.entries.values()].map((entry) => ({ ...entry })),
+    };
+  }
+
+  hydrate(snapshot: ToolSchemaCacheSnapshot): void {
+    this.entries.clear();
+
+    const sorted = [...snapshot.entries].sort(
+      (left, right) =>
+        right.lastSeenAt - left.lastSeenAt || right.firstSeenAt - left.firstSeenAt,
+    );
+
+    for (const entry of sorted.slice(0, this.maxEntries)) {
+      this.entries.set(entry.hash, { ...entry });
+    }
+  }
+
   private evictOverflow(): void {
     while (this.entries.size > this.maxEntries) {
       const oldest = [...this.entries.values()].sort(
@@ -108,5 +144,40 @@ export class ToolSchemaCache {
 
       this.entries.delete(oldest.hash);
     }
+  }
+}
+
+/** 文件持久化 schema cache，适合工具 schema 注册后的重启恢复。 */
+export class PersistentToolSchemaCache extends ToolSchemaCache {
+  private readonly snapshotPath: string;
+
+  constructor(private readonly persistentOptions: PersistentToolSchemaCacheOptions) {
+    super(persistentOptions);
+    this.snapshotPath = join(
+      persistentOptions.rootDir,
+      persistentOptions.fileName ?? 'tool-schema-cache.json',
+    );
+    this.loadSnapshot();
+  }
+
+  override remember(schema: unknown): ToolSchemaCacheEntry {
+    const entry = super.remember(schema);
+    this.saveSnapshot();
+    return entry;
+  }
+
+  private loadSnapshot(): void {
+    if (!existsSync(this.snapshotPath)) {
+      return;
+    }
+
+    this.hydrate(JSON.parse(readFileSync(this.snapshotPath, 'utf8')) as ToolSchemaCacheSnapshot);
+  }
+
+  private saveSnapshot(): void {
+    mkdirSync(this.persistentOptions.rootDir, { recursive: true });
+    const tempPath = `${this.snapshotPath}.${process.pid}.tmp`;
+    writeFileSync(tempPath, JSON.stringify(this.snapshot(), null, 2), 'utf8');
+    renameSync(tempPath, this.snapshotPath);
   }
 }

@@ -1,5 +1,9 @@
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
+  FileCheckpointStore,
   InMemoryCheckpointStore,
   createWorkflowCheckpoint,
 } from '../src/orchestration/checkpoint';
@@ -58,6 +62,46 @@ describe('orchestration checkpoints', () => {
           {
             key: 'plan',
             value: 'planned',
+          },
+        ],
+      },
+    });
+  });
+
+  it('persists workflow checkpoints across file store instances', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'miniharness-checkpoints-'));
+    const firstStore = new FileCheckpointStore({ rootDir });
+    const checkpoint = createWorkflowCheckpoint({
+      workflowRunId: 'workflow/file:test',
+      workflowDefinitionId: 'workflow_def',
+      currentState: 'review',
+      taskExecutions: [],
+      messages: [],
+      scratchpad: {
+        entries: [
+          {
+            key: 'note',
+            value: { accepted: true },
+            version: 1,
+            writerId: 'reviewer',
+            createdAt: 1000,
+            updatedAt: 2000,
+          },
+        ],
+      },
+    });
+
+    await firstStore.save(checkpoint);
+
+    const secondStore = new FileCheckpointStore({ rootDir });
+    await expect(secondStore.load('workflow/file:test')).resolves.toMatchObject({
+      workflowRunId: 'workflow/file:test',
+      currentState: 'review',
+      scratchpad: {
+        entries: [
+          {
+            key: 'note',
+            value: { accepted: true },
           },
         ],
       },

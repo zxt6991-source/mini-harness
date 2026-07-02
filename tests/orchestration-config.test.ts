@@ -79,4 +79,42 @@ orchestration:
       },
     });
   });
+
+  it('loads file persistence settings for checkpoints and schema cache', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'miniharness-persistence-config-'));
+    const configPath = join(dir, 'harness.yaml');
+    await writeFile(
+      configPath,
+      `
+runtime:
+  maxSteps: 4
+  requestTimeoutMs: 1000
+model:
+  provider: mock
+orchestration:
+  checkpoint:
+    enabled: true
+    store: jsonl
+    rootDir: .miniharness/test-checkpoints
+production:
+  schemaCache:
+    enabled: true
+    store: json
+    rootDir: .miniharness/test-schema-cache
+`,
+    );
+
+    const config = await loadHarnessConfig(configPath);
+
+    expect(config.orchestration.checkpoint).toMatchObject({
+      enabled: true,
+      store: 'jsonl',
+      rootDir: '.miniharness/test-checkpoints',
+    });
+    expect(config.production.schemaCache).toMatchObject({
+      enabled: true,
+      store: 'json',
+      rootDir: '.miniharness/test-schema-cache',
+    });
+  });
 });

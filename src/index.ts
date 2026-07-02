@@ -1,5 +1,8 @@
 // 该文件统一导出 MiniHarness 的公共 API，方便外部以包入口方式引用各模块能力。
 export * from './core';
+export * from './app/create-harness';
+export * from './server/http';
+export * from './server/graceful-shutdown';
 export * from './runtime/engine';
 export * from './runtime/budget';
 export * from './runtime/drift';

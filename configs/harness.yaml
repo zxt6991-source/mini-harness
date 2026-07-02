@@ -142,6 +142,8 @@ production:
     exposeMetadata: true
   schemaCache:
     enabled: true
+    store: memory
+    rootDir: .miniharness/production/schema-cache
     maxEntries: 1000
   metrics:
     enabled: true

@@ -479,10 +479,14 @@ const productionConfigSchema = z
     schemaCache: z
       .object({
         enabled: z.boolean().default(true),
+        store: z.enum(['memory', 'json']).default('memory'),
+        rootDir: z.string().default('.miniharness/production/schema-cache'),
         maxEntries: z.number().int().positive().default(1_000),
       })
       .default({
         enabled: true,
+        store: 'memory',
+        rootDir: '.miniharness/production/schema-cache',
         maxEntries: 1_000,
       }),
     metrics: z
@@ -510,6 +514,8 @@ const productionConfigSchema = z
     },
     schemaCache: {
       enabled: true,
+      store: 'memory',
+      rootDir: '.miniharness/production/schema-cache',
       maxEntries: 1_000,
     },
     metrics: {
